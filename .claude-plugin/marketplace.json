@@ -1,0 +1,5 @@
+{
+  "name": "vibento-eklenti",
+  "owner": { "name": "Vibento (3g-0 olcumu)" },
+  "plugins": [{ "name": "vibento-deneme", "source": "./vibento-deneme", "description": "3g-0 tikla-kur olcumu: bos deneme eklentisi, hicbir sey yapmaz." }]
+}
