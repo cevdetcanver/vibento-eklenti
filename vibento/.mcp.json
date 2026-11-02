@@ -2,7 +2,7 @@
   "mcpServers": {
     "vibento": {
       "type": "http",
-      "url": "${user_config.sunucu}/api/mcp",
+      "url": "https://vibento.app/api/mcp",
       "headersHelper": "cat \"$HOME/.vibento/mcp-baslik.json\" 2>/dev/null || type \"%USERPROFILE%\\.vibento\\mcp-baslik.json\""
     }
   }

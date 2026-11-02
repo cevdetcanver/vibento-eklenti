@@ -7,7 +7,7 @@
 // (tests/eklenti-kimlik.test.mjs) aynı girdide Node'un createHmac'iyle aynı kanıtı ölçer.
 // =====================================================================
 
-import { KIMLIK_ARACLARI } from './kimlik-araclari.mjs';
+import { KIMLIK_ARACLARI, TUM_ARACLAR } from './kimlik-araclari.mjs';
 
 const ETIKET = 'vibento-kimlik-v1';
 const AYRAC = '.k1.';
@@ -57,7 +57,9 @@ export function vibentoAracAdi(aracAdi) {
  * aynı adlı başka bir sunucu bu izni alamaz. Altta bir karar varsa (ask/deny/allow) ezilmez: çağıran denetler.
  */
 export function izinVerilirMi(aracAdi) {
-  return typeof aracAdi === 'string' && aracAdi.startsWith('mcp__plugin_vibento_vibento__') && aracAdi.length > 'mcp__plugin_vibento_vibento__'.length;
+  const onek = 'mcp__plugin_vibento_vibento__';
+  // Tarama O1: yalnız önek yetmez, başka bir sunucu aynı öneki taşıyabilir; bilinen araç adıyla sınırlı.
+  return typeof aracAdi === 'string' && aracAdi.startsWith(onek) && TUM_ARACLAR.includes(aracAdi.slice(onek.length));
 }
 
 /**

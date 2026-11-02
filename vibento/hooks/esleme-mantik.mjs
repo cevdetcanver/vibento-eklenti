@@ -9,7 +9,7 @@
 
 export const ISTEMCI = 'claude-code';
 // `.claude-plugin/plugin.json` sürümüyle aynı (test denetler); sunucuya `istemci_surum` olarak gider.
-export const SURUM = '0.1.0';
+export const SURUM = '0.1.1';
 export const BAGLANTI_ANAHTARI = 'vibento.baglanti';
 export const ESLEME_ANAHTARI = 'vibento.esleme';
 export const VARSAYILAN_SUNUCU = 'https://vibento.app';
@@ -25,13 +25,14 @@ const CIHAZ_KODU = /^[A-Za-z0-9_-]{43}$/;
 const JETON = /^vib_[A-Za-z0-9_-]{20,200}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Sunucu adresi: https, ya da yalnız yerel geliştirmede http (localhost / 127.0.0.1). Bozuksa varsayılan. Sondaki eğik çizgi atılır. */
+/** Sunucu adresi: yalnız vibento.app ya da yerel geliştirme (localhost / 127.0.0.1). Başka her değer varsayılana döner: jeton başka adrese gitmez. */
 export function sunucuAdresi(deger) {
   if (typeof deger !== 'string' || !deger.trim()) return VARSAYILAN_SUNUCU;
   let u;
   try { u = new URL(deger.trim()); } catch { return VARSAYILAN_SUNUCU; }
   const yerel = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
-  if (u.protocol !== 'https:' && !(u.protocol === 'http:' && yerel)) return VARSAYILAN_SUNUCU;
+  if (!yerel && !(u.protocol === 'https:' && u.hostname === 'vibento.app')) return VARSAYILAN_SUNUCU;
+  if (yerel && u.protocol !== 'http:' && u.protocol !== 'https:') return VARSAYILAN_SUNUCU;
   if (u.username || u.password || u.search || u.hash) return VARSAYILAN_SUNUCU;
   return `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
 }
@@ -70,7 +71,7 @@ export function baslatYanitiOku(durum, metin) {
  * | { tur: 'zaten_teslim' } (başka pencere aldı; depoya bak) | { tur: 'bitti' } (süre doldu / reddedildi / yok; yeni kod) | { tur: 'hata' }.
  * @param {number} durum
  * @param {string} metin
- * @returns {{ tur: 'tamam', token: string, baglanti_id: string }
+ * @returns {{ tur: 'tamam', token: string, baglanti_id: string, hesap_ad: string | null, eposta_maskeli: string | null }
  *   | { tur: 'bekliyor' | 'yavasla' | 'zaten_teslim' | 'bitti' | 'hata' }}
  */
 export function teslimYanitiOku(durum, metin) {
@@ -79,7 +80,8 @@ export function teslimYanitiOku(durum, metin) {
   if (durum === 200 && v.durum === 'tamam') {
     if (typeof v.token !== 'string' || !JETON.test(v.token)) return { tur: 'hata' };
     if (typeof v.baglanti_id !== 'string' || !UUID.test(v.baglanti_id)) return { tur: 'hata' };
-    return { tur: 'tamam', token: v.token, baglanti_id: v.baglanti_id };
+    const metin = (d) => (typeof d === 'string' && d.trim() ? d.trim().slice(0, 120) : null);
+    return { tur: 'tamam', token: v.token, baglanti_id: v.baglanti_id, hesap_ad: metin(v.hesap_ad), eposta_maskeli: metin(v.eposta_maskeli) };
   }
   if (durum === 200 && (v.durum === 'bekliyor' || v.durum === 'yavasla' || v.durum === 'zaten_teslim')) return { tur: v.durum };
   if (durum === 200 && (v.durum === 'suresi_doldu' || v.durum === 'reddedildi' || v.durum === 'yok')) return { tur: 'bitti' };
@@ -117,5 +119,8 @@ export function kodSatiri(bekleyen, simdi) {
     + `(${kalanDk} dk geçerli). Kullanıcıya bu satırı aynen göster; kodu kendin bir yere girme.`;
 }
 
-/** Bağlandıktan sonraki ilk istemde bir kez gösterilen satır. */
-export const BAGLANDI_SATIRI = 'Vibento: bu bilgisayar bağlandı. Bu pencere artık Vibento işlerine kayıt yazar.';
+/** Bağlandıktan sonra bir kez gösterilen satır: HANGİ hesaba bağlandığını söyler (başkası kodu kendi hesabında onayladıysa fark edilsin). */
+export function baglandiSatiri(hesapAd, epostaMaskeli) {
+  const kim = hesapAd ? `"${hesapAd}"${epostaMaskeli ? ` (${epostaMaskeli})` : ''} çalışma alanına` : 'Vibento hesabına';
+  return `Vibento: bu bilgisayar ${kim} bağlandı; sohbet kayıtları artık oraya yazılır. Bu sen değilsen hemen kullanıcıya söyle: bağlantı vibento.app'te iptal edilmeli. Kullanıcıya bu satırı aynen göster.`;
+}

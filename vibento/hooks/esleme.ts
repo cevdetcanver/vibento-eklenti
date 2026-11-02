@@ -8,7 +8,7 @@
 
 import type { Io } from './io.ts'
 import {
-  ISTEMCI, SURUM, BAGLANTI_ANAHTARI, ESLEME_ANAHTARI, YAVASLA_EK_SN, ISTEM_HATIRLATMA, BAGLANDI_SATIRI,
+  ISTEMCI, SURUM, BAGLANTI_ANAHTARI, ESLEME_ANAHTARI, YAVASLA_EK_SN, ISTEM_HATIRLATMA, baglandiSatiri,
   baslatYanitiOku, teslimYanitiOku, baglantiGecerli, bekleyenGecerli, yenilemeZamani, kodSatiri,
 } from './esleme-mantik.mjs'
 
@@ -18,13 +18,14 @@ type Bekleyen = {
 }
 
 const JSON_BASLIK = { 'content-type': 'application/json' }
+const YENILEME_KILIDI = 'vibento.yenileme-kilidi'
 
 export function eslemeKur(sunucu: string) {
   let yoklayici: { cancel(): void } | null = null
   let mesgul = false
   let bekle = 0
   let istemSayaci = 0
-  let baglandiDuyur = false
+  let baglandiDuyur: string | null = null
 
   async function baglantiOku(io: Io): Promise<Baglanti | null> {
     const k = await io.depoOku(BAGLANTI_ANAHTARI)
@@ -69,10 +70,36 @@ export function eslemeKur(sunucu: string) {
       const ev = await io.evKlasoru()
       if (!ev) return
       const a = ev.includes('\\') ? '\\' : '/'
-      await io.dosyaYaz(`${ev}${a}.vibento${a}mcp-baslik.json`, JSON.stringify(token ? { Authorization: `Bearer ${token}` } : {}))
+      const yol = `${ev}${a}.vibento${a}mcp-baslik.json`
+      await io.dosyaYaz(yol, JSON.stringify(token ? { Authorization: `Bearer ${token}` } : {}))
+      if (a === '/') await io.komut(['chmod', '600', yol], 3_000).catch(() => null)
     } catch {
       // araçlar bir sonraki açılışa kalır; tur bozulmaz
     }
+  }
+
+  // Reddedilen jeton hâlâ depodaki mi? Başka pencere yenilediyse başlık dosyasında daha yeni jeton vardır: onu benimse, silme. Depo süreç içinde
+  // önbellekli olabilir (ölçülmedi); dosya her zaman tazedir.
+  async function reddedildi(io: Io, reddedilen: string) {
+    try {
+      const depo = await baglantiOku(io)
+      if (depo && depo.token !== reddedilen) return
+      const ev = await io.evKlasoru()
+      if (ev && depo) {
+        const a = ev.includes('\\') ? '\\' : '/'
+        const m = await io.dosyaOku(`${ev}${a}.vibento${a}mcp-baslik.json`).catch(() => null)
+        const dosya = m ? (JSON.parse(m) as { Authorization?: unknown }).Authorization : null
+        const yeni = typeof dosya === 'string' && dosya.startsWith('Bearer ') ? dosya.slice(7) : null
+        if (yeni && yeni !== reddedilen && baglantiGecerli({ ...depo, token: yeni })) {
+          await io.depoYaz(BAGLANTI_ANAHTARI, { ...depo, token: yeni, yenilendi_at: new Date().toISOString() })
+          return
+        }
+      }
+    } catch {
+      // okunamadı: silme yoluna düşer
+    }
+    await io.depoSil(BAGLANTI_ANAHTARI)
+    await baslikYaz(io, null)
   }
 
   function durdur() {
@@ -86,7 +113,7 @@ export function eslemeKur(sunucu: string) {
     if (bekle > 0) { bekle -= 1; return }
     mesgul = true
     try {
-      if (await baglantiOku(io)) { durdur(); baglandiDuyur = true; return }
+      if (await baglantiOku(io)) { durdur(); baglandiDuyur = baglandiSatiri(null, null); return }
       const b = await bekleyenOku(io)
       if (!b) { durdur(); return }
       const y = await io.istek(`${sunucu}/api/esleme/jeton`, {
@@ -100,8 +127,8 @@ export function eslemeKur(sunucu: string) {
         await baslikYaz(io, r.token)
         try { await io.mcpBagla() } catch { /* sonraki açılışta bağlanır */ }
         durdur()
-        baglandiDuyur = true
-        io.bildir('Vibento: bu bilgisayar bağlandı.')
+        baglandiDuyur = baglandiSatiri(r.hesap_ad, r.eposta_maskeli)
+        io.bildir(baglandiDuyur)
       } else if (r.tur === 'yavasla') {
         bekle = Math.ceil(YAVASLA_EK_SN / Math.max(1, b.aralik))
       } else if (r.tur === 'zaten_teslim') {
@@ -123,13 +150,18 @@ export function eslemeKur(sunucu: string) {
     yoklayici = io.herBirde(b.aralik * 1000, () => { void yokla(io) })
   }
 
+  // Y4 (tarama 2 Kas): birkaç pencere aynı anda açılınca aynı eski jetonla yenileyebilir; kazanan dışındakiler 401 alır. Kilit yenilemeyi tek
+  // pencereye indirir; 401 yalnız depodaki jeton HÂLÂ reddedilen jetonsa silme sayılır (jetonReddedildi).
   async function jetonYenile(io: Io, k: Baglanti) {
     if (!yenilemeZamani(k, Date.now())) return
     try {
+      const kilit = Number(await io.depoOku(YENILEME_KILIDI))
+      if (Number.isFinite(kilit) && Date.now() - kilit < 120_000) return
+      await io.depoYaz(YENILEME_KILIDI, Date.now())
       const y = await io.istek(`${sunucu}/api/esleme/yenile`, {
         method: 'POST', headers: { ...JSON_BASLIK, authorization: `Bearer ${k.token}` }, body: '{}',
       })
-      if (y.status === 401) { await io.depoSil(BAGLANTI_ANAHTARI); await baslikYaz(io, null); return } // iptal ya da hareketsiz: yeniden eşleme
+      if (y.status === 401) { await reddedildi(io, k.token); return } // iptal, hareketsiz ya da başka pencere yeniledi
       if (!y.ok) return
       const v = JSON.parse(y.text) as { ok?: boolean; token?: unknown }
       const yeni = { ...k, token: String(v.token ?? ''), yenilendi_at: new Date().toISOString() }
@@ -160,7 +192,7 @@ export function eslemeKur(sunucu: string) {
     /** İstem: bağlandıysa bir kez "bağlandı"; bekleyen kod varsa ilk birkaç istemde kod satırı. */
     async istem(io: Io): Promise<string | null> {
       try {
-        if (baglandiDuyur) { baglandiDuyur = false; return BAGLANDI_SATIRI }
+        if (baglandiDuyur) { const s = baglandiDuyur; baglandiDuyur = null; return s }
         if (await baglantiOku(io)) return null
         const b = await bekleyenOku(io)
         if (!b) return null
@@ -172,11 +204,8 @@ export function eslemeKur(sunucu: string) {
       }
     },
 
-    /** Sunucu jetonu reddetti (401): depodan sil, sonraki açılış yeni kod ister. */
-    async jetonReddedildi(io: Io) {
-      await io.depoSil(BAGLANTI_ANAHTARI)
-      await baslikYaz(io, null)
-    },
+    /** Sunucu jetonu reddetti (401): başka pencere yenilemediyse sil, sonraki açılış yeni kod ister. */
+    jetonReddedildi: reddedildi,
 
     durdur,
   }

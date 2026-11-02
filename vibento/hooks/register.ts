@@ -33,7 +33,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: (a, ms) => $.process.run(a, { timeoutMs: ms }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -41,6 +41,7 @@ export const register: Register = (on, options) => {
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
+      dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
     try {
@@ -48,8 +49,8 @@ export const register: Register = (on, options) => {
       if (kod) return bagla(r, kod)
       const k = await esleme.baglantiOku(io)
       if (!k) return r
-      const y = await olaylar.ilet(io, k.token, e as unknown as Record<string, unknown>)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io); return r }
+      const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)
+      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return r }
       const { baglam, oturumAdi } = acilisCiktisi(e as unknown as Record<string, unknown>, y.govde)
       // Açılış da pencereyi boşa düşürür: yeni açılan pencere de uyandırılabilir olmalı (kanca: `--dinle` Stop VE SessionStart'ta).
       const yeniNesil = e.source === 'startup' || e.source === 'resume' || e.source === 'clear'
@@ -69,7 +70,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: (a, ms) => $.process.run(a, { timeoutMs: ms }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -77,6 +78,7 @@ export const register: Register = (on, options) => {
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
+      dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
     try {
@@ -92,8 +94,8 @@ export const register: Register = (on, options) => {
       if (hazir.onay) ek.kapi_onay = hazir.onay
       const karar = istemSinifi(e.prompt) === 'insan' ? onayKarariAyikla(ideBaglamiSoy(e.prompt)) : null
       if (karar) ek.onay_karari = karar
-      const y = await olaylar.ilet(io, k.token, e as unknown as Record<string, unknown>, ek)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io); return bagla(r, not) }
+      const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>, ek)
+      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return bagla(r, not) }
       // Öncelik: ad kapısı > onay kararı > pencere mesajı; o turda tek çıktı (değişmez 2, 10, 13). Her hata: durdurma yok.
       const kapi = kapiKarari(hazir, y.govde, e.prompt)
       const adim = kapi.yerel
@@ -136,7 +138,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: (a, ms) => $.process.run(a, { timeoutMs: ms }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -144,13 +146,14 @@ export const register: Register = (on, options) => {
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
+      dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
     try {
       const k = await esleme.baglantiOku(io)
       if (!k) return r
-      const y = await olaylar.ilet(io, k.token, e as unknown as Record<string, unknown>)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io); return r }
+      const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)
+      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return r }
       // Sohbet kaydı arka planda (tur beklemez); aynı dosyada ikinci eşitleme başlamaz (senk.ts).
       // Pencere boşa düştü: uyandırma yoklaması başlar (Realtime yerine; mod ortamında WebSocket yok).
       uyandirma.basla(io, k.token, e.session_id)
@@ -170,7 +173,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: (a, ms) => $.process.run(a, { timeoutMs: ms }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -178,11 +181,12 @@ export const register: Register = (on, options) => {
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
+      dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
     try {
       const k = await esleme.baglantiOku(io)
-      if (k && (await olaylar.ilet(io, k.token, e as unknown as Record<string, unknown>)) === 'reddedildi') await esleme.jetonReddedildi(io)
+      if (k && (await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)) === 'reddedildi') await esleme.jetonReddedildi(io, k.token)
       else if (k) void senk.senkYap(io, k.token, e.transcript_path, e.session_id, e.cwd, 20_000)
     } catch {
       // fail-open
@@ -196,7 +200,7 @@ export const register: Register = (on, options) => {
     uyandirma.durdur(e.session_id)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: (a, ms) => $.process.run(a, { timeoutMs: ms }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -204,6 +208,7 @@ export const register: Register = (on, options) => {
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
+      dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
     try {
@@ -211,7 +216,7 @@ export const register: Register = (on, options) => {
       const kAnahtar = kapiAnahtari(e.session_id)
       if (kAnahtar) await io.depoSil(kAnahtar)
       const k = await esleme.baglantiOku(io)
-      if (k && (await olaylar.ilet(io, k.token, e as unknown as Record<string, unknown>)) === 'reddedildi') await esleme.jetonReddedildi(io)
+      if (k && (await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)) === 'reddedildi') await esleme.jetonReddedildi(io, k.token)
       // Kapanışta kısa bütçe (bugünkü kanca 1 sn): kalan, bir sonraki açılışın Stop'unda sunucunun ofsetinden sürer.
       else if (k) await senk.senkYap(io, k.token, e.transcript_path, e.session_id, e.cwd, 1_500)
     } catch {

@@ -24,5 +24,6 @@ export type Io = {
   istemGonder(metin: string): Promise<unknown>
   evKlasoru(): Promise<string | null>
   dosyaYaz(yol: string, metin: string): Promise<void>
+  dosyaOku(yol: string): Promise<string>
   mcpBagla(): Promise<void>
 }

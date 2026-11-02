@@ -48,16 +48,19 @@ export function olayKur(sunucu: string) {
     }
   }
 
-  async function kuyruguBosalt(io: Io, token: string): Promise<'devam' | 'reddedildi'> {
+  // O7: kuyruk bağlantıya bağlı; bilgisayar başka hesaba eşlenirse eski bağlantının olayları yeni hesaba GİTMEZ.
+  const anahtar = (baglantiId: string) => `${KUYRUK_ANAHTARI}.${baglantiId}`
+
+  async function kuyruguBosalt(io: Io, token: string, baglantiId: string): Promise<'devam' | 'reddedildi'> {
     try {
-      let kuyruk = (await io.depoOku(KUYRUK_ANAHTARI)) as Record<string, unknown>[] | undefined
+      let kuyruk = (await io.depoOku(anahtar(baglantiId))) as Record<string, unknown>[] | undefined
       if (!Array.isArray(kuyruk) || kuyruk.length === 0) return 'devam'
       for (let i = 0; i < KUYRUK_BOSALTMA && kuyruk.length > 0; i += 1) {
         const r = await istek(io, token, kuyruk[0] as Record<string, unknown>, 3_000)
         if (r.kod === 401 || r.kod === 403) return 'reddedildi'
         if (r.kod < 200 || r.kod >= 300) break
         kuyruk = kuyruk.slice(1)
-        await io.depoYaz(KUYRUK_ANAHTARI, kuyruk)
+        await io.depoYaz(anahtar(baglantiId), kuyruk)
       }
       return 'devam'
     } catch {
@@ -70,9 +73,10 @@ export function olayKur(sunucu: string) {
      * Bir olayı iletir. `ekAlanlar` gövdeye eklenir (ad kapısı / onay kararı, 3g-3b-2). Dönüş: sunucunun yanıtı (2xx'te gövde), ya da
      * `reddedildi` (jeton geçersiz; çağıran eşlemeyi sıfırlar).
      */
-    async ilet(io: Io, token: string, olay: Record<string, unknown>, ekAlanlar: Record<string, unknown> = {}):
+    async ilet(io: Io, k: { token: string; baglanti_id: string }, olay: Record<string, unknown>, ekAlanlar: Record<string, unknown> = {}):
       Promise<Gonderim | 'reddedildi'> {
-      if ((await kuyruguBosalt(io, token)) === 'reddedildi') return 'reddedildi'
+      const token = k.token
+      if ((await kuyruguBosalt(io, token, k.baglanti_id)) === 'reddedildi') return 'reddedildi'
       const govde: Record<string, unknown> = {
         ...govdeKur(olay, { zaman: new Date(await io.simdi()).toISOString(), olay_kimligi: rastgeleKimlik() }),
         ...ekAlanlar,
@@ -90,7 +94,7 @@ export function olayKur(sunucu: string) {
         return r
       }
       try {
-        await io.depoYaz(KUYRUK_ANAHTARI, kuyrugaEkle(await io.depoOku(KUYRUK_ANAHTARI), govde))
+        await io.depoYaz(anahtar(k.baglanti_id), kuyrugaEkle(await io.depoOku(anahtar(k.baglanti_id)), govde))
       } catch {
         // depo dolu: olay kaybolur, tur bozulmaz
       }

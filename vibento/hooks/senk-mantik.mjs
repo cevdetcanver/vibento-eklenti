@@ -53,16 +53,20 @@ export function windowsYolu(dosya) {
 
 /**
  * Dosyanın [bas, bas+uzunluk) bayt aralığını base64 olarak stdout'a yazan komut (argv). Geçersiz girdide null.
- * Windows: PowerShell `-EncodedCommand` (UTF-16LE base64; yol tek tırnak içinde, `'` → `''`). Paylaşım ReadWrite+Delete: Claude Code
+ * Windows: PowerShell `-EncodedCommand` (UTF-16LE base64; yol ayrıca base64). Paylaşım ReadWrite+Delete: Claude Code
  * dosyaya yazmayı sürdürürken okunur. Diğerleri: `/bin/sh -c 'tail -c +N "$1" | head -c M | base64 | tr -d "\n"'`, yol konumsal argüman.
  */
 export function pencereKomutu(dosya, bas, uzunluk) {
   if (typeof dosya !== 'string' || dosya.length === 0 || dosya.length > 1024 || DENETIM.test(dosya)) return null;
   if (!Number.isSafeInteger(bas) || bas < 0 || !Number.isSafeInteger(uzunluk) || uzunluk <= 0 || uzunluk > PENCERE_TAVANI) return null;
   if (windowsYolu(dosya)) {
-    const yol = dosya.replace(/'/g, "''");
+    // Yol betik metnine GİRMEZ: PowerShell kıvrık tırnağı da tırnak sayar (tarama 2 Kas, kanıtlandı). UTF-16LE base64 olarak verilir, betikte çözülür.
+    const yolBayt = new Uint8Array(dosya.length * 2);
+    for (let i = 0; i < dosya.length; i += 1) { const k = dosya.charCodeAt(i); yolBayt[i * 2] = k & 255; yolBayt[i * 2 + 1] = k >> 8; }
+    const yol = base64Yaz(yolBayt);
     const betik = "$ErrorActionPreference='Stop';"
-      + `$f=[IO.File]::Open('${yol}',[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete);`
+      + `$p=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${yol}'));`
+      + `$f=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete);`
       + `try{[void]$f.Seek(${bas},[IO.SeekOrigin]::Begin);$b=New-Object byte[] ${uzunluk};$t=0;`
       + `while($t -lt ${uzunluk}){$r=$f.Read($b,$t,${uzunluk}-$t);if($r -le 0){break};$t+=$r};`
       + '[Console]::Out.Write([Convert]::ToBase64String($b,0,$t))}finally{$f.Dispose()}';
