@@ -1,15 +1,27 @@
+<img src="vibento/assets/icon.png" width="72" alt="Vibento">
+
 # Vibento eklentisi (Claude Code)
 
-Vibento'nun Claude Code eklentilerinin herkese açık rafı.
+Claude Code oturumlarını [Vibento](https://vibento.app) işlerine bağlar: kaldığın yer, günlük, pencereler arası mesaj.
 
-Şu an yalnız `vibento-deneme` var: içi boş bir deneme eklentisi. Kanca, araç ya da ayar içermez; kurulum ekranını ölçmek için duruyor.
-Asıl bağlayıcı hazır olunca buraya gelir ve vibento.app'teki "Claude Code'a kur" düğmesi onu kurar.
+## Kurulum
 
-Terminalden kurulum (deneyimli kullanıcı):
+En kolayı vibento.app › Bilgisayarlar › Bilgisayar ekle sayfasındaki **Claude Code'a kur** düğmesi. Terminal sürümünde aynısı:
 
 ```
-claude plugin marketplace add cevdetcanver/vibento-eklenti
-claude plugin install vibento-deneme@vibento-eklenti
+/plugin marketplace add cevdetcanver/vibento-eklenti
+/plugin install vibento@vibento-eklenti
 ```
 
-Bu depoda gizli bilgi yoktur; eklentinin bütün iş mantığı Vibento sunucusundadır.
+Kurduktan sonra yeni bir Claude Code penceresi aç. Eklenti sekiz harflik bir kod gösterir; kodu vibento.app/bagla sayfasında yaz ve bilgisayarı onayla.
+
+## Eklenti ne yapar
+
+- Oturum olaylarını ve süzgeçten geçmiş sohbet kaydını **senin** Vibento hesabına gönderir. Gizli değer biçimleri göndermeden önce süzülür.
+- Açılışta işinin "kaldığımız yer" bilgisini pencereye getirir, başka pencerelerden gelen mesajları iletir.
+- Bağlantı anahtarını bilgisayarında tutar (`~/.vibento/mcp-baslik.json` ve Claude Code'un eklenti deposu). Anahtar Vibento dışına gitmez.
+- Vibento araçları ilk kullanımda ayrıca izin sormaz; bu araçlar yalnız Vibento hesabına yazar, bilgisayardaki dosyalara dokunmaz.
+
+Bağlantıyı istediğin an vibento.app › Bilgisayarlar sayfasından iptal edebilirsin. Kaldırmak için: `/plugin uninstall vibento@vibento-eklenti`.
+
+Bu depoda gizli bilgi yoktur; iş mantığı Vibento sunucusundadır.
