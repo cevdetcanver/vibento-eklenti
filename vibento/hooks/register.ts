@@ -27,7 +27,8 @@ export const register: Register = (on, options) => {
   const olaylar = olayKur(sunucu)
   const senk = senkKur(sunucu)
   const istek: Istek = (io, t, y, m, g, ms) => istekYap(io, sunucu, t, y, m, g, ms)
-  const uyandirma = uyandirmaKur(istek)
+  // Boştaki pencere de anahtarın reddedildiğini yoklamada öğrenir: bildirim düşer, sonraki istemde kod gelir.
+  const uyandirma = uyandirmaKur(istek, (io, jeton) => esleme.jetonReddedildi(io, jeton))
 
   on('classic.SessionStart', async ($, e, next) => {
     const r = await next(e)
@@ -50,7 +51,8 @@ export const register: Register = (on, options) => {
       const k = await esleme.baglantiOku(io)
       if (!k) return r
       const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return r }
+      // Anahtar reddedildi: pencere sessizce kopmasın, kod bu açılışta gelsin (eskiden ikinci bir konuşma gerekiyordu; 2 Kas ölçüldü).
+      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return bagla(r, await esleme.istem(io)) }
       const { baglam, oturumAdi } = acilisCiktisi(e as unknown as Record<string, unknown>, y.govde)
       // Açılış da pencereyi boşa düşürür: yeni açılan pencere de uyandırılabilir olmalı (kanca: `--dinle` Stop VE SessionStart'ta).
       const yeniNesil = e.source === 'startup' || e.source === 'resume' || e.source === 'clear'
@@ -95,7 +97,7 @@ export const register: Register = (on, options) => {
       const karar = istemSinifi(e.prompt) === 'insan' ? onayKarariAyikla(ideBaglamiSoy(e.prompt)) : null
       if (karar) ek.onay_karari = karar
       const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>, ek)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return bagla(r, not) }
+      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return bagla(r, (await esleme.istem(io)) ?? not) }
       // Öncelik: ad kapısı > onay kararı > pencere mesajı; o turda tek çıktı (değişmez 2, 10, 13). Her hata: durdurma yok.
       const kapi = kapiKarari(hazir, y.govde, e.prompt)
       const adim = kapi.yerel

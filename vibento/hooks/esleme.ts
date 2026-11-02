@@ -10,11 +10,16 @@ import type { Io } from './io.ts'
 import {
   ISTEMCI, SURUM, BAGLANTI_ANAHTARI, ESLEME_ANAHTARI, YAVASLA_EK_SN, ISTEM_HATIRLATMA, baglandiSatiri,
   baslatYanitiOku, teslimYanitiOku, baglantiGecerli, bekleyenGecerli, yenilemeZamani, kodSatiri,
+  cihazAdiTemizle, bekleyenYoklanabilir, yoklanacakKodlar,
+  KOD_ISTEK_ARALIGI_MS, KOD_ISTEK_BUTCESI_MS, KOD_ISTEK_TAVANI, KOPMA_BILDIRIMI, KOPMA_ON_SATIRI,
 } from './esleme-mantik.mjs'
+import { sureli } from './olay.ts'
 
 export type Baglanti = { token: string; baglanti_id: string; sunucu: string; alindi_at: string; yenilendi_at?: string }
 type Bekleyen = {
   sunucu: string; kullanici_kodu: string; cihaz_kodu: string; bitis: string; aralik: number; dogrulama_adresi: string | null
+  /** Yerine yenisi istenmiş ama kullanıcının görmüş olabileceği kod: onaylanırsa teslim alınsın. */
+  onceki?: { cihaz_kodu: string; bitis: string }
 }
 
 const JSON_BASLIK = { 'content-type': 'application/json' }
@@ -26,6 +31,9 @@ export function eslemeKur(sunucu: string) {
   let bekle = 0
   let istemSayaci = 0
   let baglandiDuyur: string | null = null
+  let kopmaDuyur = false
+  let sonKodIstegi = 0
+  let kodIstekSayisi = 0
 
   async function baglantiOku(io: Io): Promise<Baglanti | null> {
     const k = await io.depoOku(BAGLANTI_ANAHTARI)
@@ -38,13 +46,16 @@ export function eslemeKur(sunucu: string) {
   }
 
   async function cihazAdi(io: Io): Promise<string | null> {
-    try {
-      const r = await io.komut(["hostname"], 3_000)
-      const ad = r.exitCode === 0 ? r.stdout.trim().slice(0, 80) : ''
-      return ad || null
-    } catch {
-      return null
+    const oku = async (komut: string[]) => {
+      try {
+        const r = await io.komut(komut, 3_000)
+        return r.exitCode === 0 ? cihazAdiTemizle(r.stdout) : null
+      } catch {
+        return null
+      }
     }
+    // Mac'te `hostname` iç ağ adresi dönebiliyor: o zaman bilgisayarın kendi adı (yoksa adsız, kart "Adı bildirilmemiş cihaz" der).
+    return (await oku(['hostname'])) ?? (await oku(['scutil', '--get', 'ComputerName']))
   }
 
   async function kodIste(io: Io): Promise<Bekleyen | null> {
@@ -55,8 +66,10 @@ export function eslemeKur(sunucu: string) {
     })
     const r = baslatYanitiOku(y.status, y.text)
     if (r.tur !== 'kod') return null
+    const eski = await io.depoOku(ESLEME_ANAHTARI)
     const b: Bekleyen = {
       sunucu, kullanici_kodu: r.kullanici_kodu, cihaz_kodu: r.cihaz_kodu, bitis: r.bitis, aralik: r.aralik, dogrulama_adresi: r.dogrulama_adresi,
+      ...(bekleyenYoklanabilir(eski, sunucu, Date.now()) ? { onceki: { cihaz_kodu: (eski as Bekleyen).cihaz_kodu, bitis: (eski as Bekleyen).bitis } } : {}),
     }
     await io.depoYaz(ESLEME_ANAHTARI, b)
     return b
@@ -100,6 +113,8 @@ export function eslemeKur(sunucu: string) {
     }
     await io.depoSil(BAGLANTI_ANAHTARI)
     await baslikYaz(io, null)
+    kopmaDuyur = true
+    try { io.bildir(KOPMA_BILDIRIMI) } catch { /* bildirim yoksa sonraki istemde satır gelir */ }
   }
 
   function durdur() {
@@ -114,29 +129,37 @@ export function eslemeKur(sunucu: string) {
     mesgul = true
     try {
       if (await baglantiOku(io)) { durdur(); baglandiDuyur = baglandiSatiri(null, null); return }
-      const b = await bekleyenOku(io)
-      if (!b) { durdur(); return }
-      const y = await io.istek(`${sunucu}/api/esleme/jeton`, {
-        method: 'POST', headers: JSON_BASLIK, body: JSON.stringify({ cihaz_kodu: b.cihaz_kodu }),
-      })
-      const r = teslimYanitiOku(y.status, y.text)
-      if (r.tur === 'tamam') {
-        const simdi = new Date().toISOString()
-        await io.depoYaz(BAGLANTI_ANAHTARI, { token: r.token, baglanti_id: r.baglanti_id, sunucu, alindi_at: simdi } satisfies Baglanti)
-        await io.depoSil(ESLEME_ANAHTARI)
-        await baslikYaz(io, r.token)
-        try { await io.mcpBagla() } catch { /* sonraki açılışta bağlanır */ }
-        durdur()
-        baglandiDuyur = baglandiSatiri(r.hesap_ad, r.eposta_maskeli)
-        io.bildir(baglandiDuyur)
-      } else if (r.tur === 'yavasla') {
-        bekle = Math.ceil(YAVASLA_EK_SN / Math.max(1, b.aralik))
-      } else if (r.tur === 'zaten_teslim') {
-        // Başka bir pencere jetonu aldı; depo bir sonraki yoklamada okunur.
-        if (!(await baglantiOku(io))) { await io.depoSil(ESLEME_ANAHTARI); durdur() }
-      } else if (r.tur === 'bitti') {
-        await io.depoSil(ESLEME_ANAHTARI)
-        durdur()
+      // Gösterilmeyen kod da yoklanır: kullanıcı son dakikada yazdıysa sunucu onaylı kodu bitişten sonra da teslim eder.
+      const ham = await io.depoOku(ESLEME_ANAHTARI)
+      if (!bekleyenYoklanabilir(ham, sunucu, Date.now())) { durdur(); return }
+      const b = ham as Bekleyen
+      for (const cihazKodu of yoklanacakKodlar(b, Date.now())) {
+        const asil = cihazKodu === b.cihaz_kodu
+        const y = await io.istek(`${sunucu}/api/esleme/jeton`, {
+          method: 'POST', headers: JSON_BASLIK, body: JSON.stringify({ cihaz_kodu: cihazKodu }),
+        })
+        const r = teslimYanitiOku(y.status, y.text)
+        if (r.tur === 'tamam') {
+          const simdi = new Date().toISOString()
+          await io.depoYaz(BAGLANTI_ANAHTARI, { token: r.token, baglanti_id: r.baglanti_id, sunucu, alindi_at: simdi } satisfies Baglanti)
+          await io.depoSil(ESLEME_ANAHTARI)
+          await baslikYaz(io, r.token)
+          try { await io.mcpBagla() } catch { /* sonraki açılışta bağlanır */ }
+          durdur()
+          baglandiDuyur = baglandiSatiri(r.hesap_ad, r.eposta_maskeli)
+          io.bildir(baglandiDuyur)
+          return
+        }
+        if (r.tur === 'yavasla') {
+          bekle = Math.ceil(YAVASLA_EK_SN / Math.max(1, b.aralik))
+        } else if (r.tur === 'zaten_teslim') {
+          // Başka bir pencere jetonu aldı; depo bir sonraki yoklamada okunur.
+          if (!(await baglantiOku(io))) { await io.depoSil(ESLEME_ANAHTARI); durdur(); return }
+        } else if (r.tur === 'bitti') {
+          if (asil) { await io.depoSil(ESLEME_ANAHTARI); durdur(); return }
+          const { onceki: _onceki, ...kalan } = b
+          await io.depoYaz(ESLEME_ANAHTARI, kalan)
+        }
       }
     } catch {
       // ağ yok: bir sonraki periyotta yeniden
@@ -178,7 +201,13 @@ export function eslemeKur(sunucu: string) {
     async acilis(io: Io): Promise<string | null> {
       try {
         const k = await baglantiOku(io)
-        if (k) { await baslikYaz(io, k.token); await jetonYenile(io, k); return null }
+        if (k) {
+          await baslikYaz(io, k.token)
+          await jetonYenile(io, k)
+          if (await baglantiOku(io)) return null
+          // Yenileme ucu 401 verdi, bağlantı silindi: neden ve kod bu açılışta.
+          return await this.istem(io)
+        }
         const b = (await bekleyenOku(io)) ?? (await kodIste(io))
         if (!b) return null
         yoklamaBaslat(io, b)
@@ -189,22 +218,36 @@ export function eslemeKur(sunucu: string) {
       }
     },
 
-    /** İstem: bağlandıysa bir kez "bağlandı"; bekleyen kod varsa ilk birkaç istemde kod satırı. */
+    /**
+     * İstem: bağlandıysa bir kez "bağlandı"; bağlı değilse kod satırı. Kod yoksa ya da süresi dolduysa açık konuşmada da yeni kod istenir
+     * (2 Kas: eski kod aynı konuşmada döngüye giriyordu). Bağlantı koptuysa başına bir kez neden yazılır.
+     */
     async istem(io: Io): Promise<string | null> {
       try {
         if (baglandiDuyur) { const s = baglandiDuyur; baglandiDuyur = null; return s }
         if (await baglantiOku(io)) return null
-        const b = await bekleyenOku(io)
-        if (!b) return null
+        let b = await bekleyenOku(io)
+        const simdi = await io.simdi()
+        if (!b && kodIstekSayisi < KOD_ISTEK_TAVANI && simdi - sonKodIstegi >= KOD_ISTEK_ARALIGI_MS) {
+          sonKodIstegi = simdi
+          kodIstekSayisi += 1
+          // Tur beklemez: yanıt geç gelirse depoya yine yazılır, sonraki istemde görünür.
+          b = await sureli(io, KOD_ISTEK_BUTCESI_MS, kodIste(io))
+          if (b) istemSayaci = 0
+        }
+        const kopma = kopmaDuyur ? KOPMA_ON_SATIRI : null
+        kopmaDuyur = false
+        if (!b) return kopma
         yoklamaBaslat(io, b)
         istemSayaci += 1
-        return istemSayaci <= ISTEM_HATIRLATMA ? kodSatiri(b, Date.now()) : null
+        const satir = istemSayaci <= ISTEM_HATIRLATMA ? kodSatiri(b, Date.now()) : null
+        return [kopma, satir].filter(Boolean).join(' ') || null
       } catch {
         return null
       }
     },
 
-    /** Sunucu jetonu reddetti (401): başka pencere yenilemediyse sil, sonraki açılış yeni kod ister. */
+    /** Sunucu jetonu reddetti (401): başka pencere yenilemediyse sil, kopmayı duyur; sonraki istem (ya da bu açılış) yeni kod ister. */
     jetonReddedildi: reddedildi,
 
     durdur,

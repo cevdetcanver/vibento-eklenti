@@ -23,7 +23,7 @@ function rastgeleKimlik(): string {
   return crypto.randomUUID()
 }
 
-async function sureli<T>(io: Io, ms: number, is: Promise<T>): Promise<T | null> {
+export async function sureli<T>(io: Io, ms: number, is: Promise<T>): Promise<T | null> {
   let zaman: { cancel(): void } | null = null
   const zamanAsimi = new Promise<null>((coz) => { zaman = io.sonra(ms, () => coz(null)) })
   try {

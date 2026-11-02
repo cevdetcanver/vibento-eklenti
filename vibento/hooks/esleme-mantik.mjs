@@ -9,7 +9,7 @@
 
 export const ISTEMCI = 'claude-code';
 // `.claude-plugin/plugin.json` sürümüyle aynı (test denetler); sunucuya `istemci_surum` olarak gider.
-export const SURUM = '0.1.2';
+export const SURUM = '0.1.3';
 export const BAGLANTI_ANAHTARI = 'vibento.baglanti';
 export const ESLEME_ANAHTARI = 'vibento.esleme';
 export const VARSAYILAN_SUNUCU = 'https://vibento.app';
@@ -19,6 +19,15 @@ export const YAVASLA_EK_SN = 5;
 export const ISTEM_HATIRLATMA = 3;
 // Jeton 30 günde bir yenilenir (sözleşme §4 "kendiliğinden yenilenen").
 export const YENILEME_GUN = 30;
+// Sonu yaklaşan kod gösterilmez: kullanıcı siteye yazana kadar dolar, yeni kod istenir (2 Kas Mac ölçümü).
+export const KOD_ASGARI_MS = 120_000;
+// Açık konuşmada yeni kod isteme aralığı ve tavanı: her istem sunucuya gitmesin, IP kotası (saatte 10) bir makine yüzünden bitmesin.
+export const KOD_ISTEK_ARALIGI_MS = 60_000;
+export const KOD_ISTEK_TAVANI = 3;
+// İstem turu kod için en çok bu kadar bekler (kanca turu bozmaz); yanıt geç gelirse depoya yine yazılır, sonraki istemde görünür.
+export const KOD_ISTEK_BUTCESI_MS = 4_000;
+// Sunucu onaylı kodu bitişten sonra da bu kadar teslim eder (0043): gösterilmeyen kod da yoklanır, yoksa onaylanan kod teslim alınmaz.
+export const TESLIM_EK_MS = 600_000;
 
 const KOD = /^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
 const CIHAZ_KODU = /^[A-Za-z0-9_-]{43}$/;
@@ -94,15 +103,48 @@ export function baglantiGecerli(kayit) {
     && typeof kayit.baglanti_id === 'string' && UUID.test(kayit.baglanti_id) && typeof kayit.sunucu === 'string';
 }
 
-/** Depodaki bekleyen eşleme hâlâ kullanılabilir mi (aynı sunucu, süresi dolmamış, biçim doğru). */
-export function bekleyenGecerli(bekleyen, sunucu, simdi) {
-  if (!bekleyen || typeof bekleyen !== 'object') return false;
-  if (bekleyen.sunucu !== sunucu) return false;
-  if (typeof bekleyen.kullanici_kodu !== 'string' || !KOD.test(bekleyen.kullanici_kodu)) return false;
-  if (typeof bekleyen.cihaz_kodu !== 'string' || !CIHAZ_KODU.test(bekleyen.cihaz_kodu)) return false;
-  const bitis = Date.parse(String(bekleyen.bitis));
-  return Number.isFinite(bitis) && bitis > simdi + 15_000; // son 15 sn: kullanıcı yetişemez, yeni kod
+function bekleyenBitisi(bekleyen, sunucu) {
+  if (!bekleyen || typeof bekleyen !== 'object') return NaN;
+  if (bekleyen.sunucu !== sunucu) return NaN;
+  if (typeof bekleyen.kullanici_kodu !== 'string' || !KOD.test(bekleyen.kullanici_kodu)) return NaN;
+  if (typeof bekleyen.cihaz_kodu !== 'string' || !CIHAZ_KODU.test(bekleyen.cihaz_kodu)) return NaN;
+  return Date.parse(String(bekleyen.bitis));
 }
+
+/** Depodaki kod kullanıcıya gösterilebilir mi (aynı sunucu, biçim doğru, siteye yazılacak kadar süresi var). */
+export function bekleyenGecerli(bekleyen, sunucu, simdi) {
+  const bitis = bekleyenBitisi(bekleyen, sunucu);
+  return Number.isFinite(bitis) && bitis > simdi + KOD_ASGARI_MS;
+}
+
+/** Depodaki kod hâlâ yoklanmalı mı: kullanıcı onu daha önce gördü, sunucu da onaylıysa bitişten sonra teslim eder. */
+export function bekleyenYoklanabilir(bekleyen, sunucu, simdi) {
+  const bitis = bekleyenBitisi(bekleyen, sunucu);
+  return Number.isFinite(bitis) && bitis + TESLIM_EK_MS > simdi;
+}
+
+/** Yoklanacak cihaz kodları: geçerli kod ve yerine yenisi istenmiş ama hâlâ teslim edilebilen eski kod. */
+export function yoklanacakKodlar(bekleyen, simdi) {
+  const kodlar = [bekleyen.cihaz_kodu];
+  const o = bekleyen.onceki;
+  if (o && typeof o.cihaz_kodu === 'string' && CIHAZ_KODU.test(o.cihaz_kodu) && Date.parse(String(o.bitis)) + TESLIM_EK_MS > simdi) kodlar.push(o.cihaz_kodu);
+  return kodlar;
+}
+
+/** Cihaz adı olarak işe yaramayan değerler: Mac `hostname`'i iç ağ adresi dönebiliyor (2 Kas ölçüldü, kartta anlamsız ve adres sızıyor). */
+export function cihazAdiTemizle(ham) {
+  if (typeof ham !== 'string') return null;
+  const tam = ham.trim();
+  if (!tam || tam.includes(':') || /^\d{1,3}(\.\d{1,3}){3}$/.test(tam)) return null;
+  // Alan adı kısmı (`x.corp.firma.com`, `.local`) atılır; `192-168-1-61` ya da `ip-10-0-0-1` gibi adres taşıyan ad da ad sayılmaz.
+  const ad = /\s/.test(tam) ? tam : tam.split('.')[0];
+  if (!ad || /(^|[^0-9])\d{1,3}-\d{1,3}-\d{1,3}-\d{1,3}($|[^0-9])/.test(ad)) return null;
+  return ad.slice(0, 80);
+}
+
+/** Sunucu anahtarı reddedince görünen ek: pencere sessizce kopmasın (tarama 2 Kas Y1, O5). */
+export const KOPMA_ON_SATIRI = "Vibento: bu bilgisayarın bağlantısı kesildi; anahtar başka bir bilgisayara devredilmiş ya da iptal edilmiş olabilir ve kayıtlar Vibento'ya gitmiyor. Beklemiyorsan vibento.app › Bilgisayarlar sayfasına bak.";
+export const KOPMA_BILDIRIMI = 'Vibento bağlantısı kesildi. Sonraki mesajda yeniden bağlama kodu gelir.';
 
 /** Jetonun yenileme zamanı geldi mi. */
 export function yenilemeZamani(kayit, simdi) {
@@ -116,7 +158,7 @@ export function kodSatiri(bekleyen, simdi) {
   const kalanDk = Math.max(1, Math.round((Date.parse(bekleyen.bitis) - simdi) / 60_000));
   const adres = bekleyen.dogrulama_adresi ?? `${bekleyen.sunucu}/bagla`;
   return `Vibento: bu bilgisayar henüz bağlı değil. Bağlamak için ${adres} adresinde şu kodu yaz: ${bekleyen.kullanici_kodu} `
-    + `(${kalanDk} dk geçerli). Kullanıcıya bu satırı aynen göster; kodu kendin bir yere girme.`;
+    + `(${kalanDk} dk geçerli). Kullanıcıya bu satırı aynen göster; kodu kendin bir yere girme. Sonraki turlarda bu kodu tekrar etme: süresi dolan kod çalışmaz, gerekince yeni satır gelir.`;
 }
 
 /** Bağlandıktan sonra bir kez gösterilen satır: HANGİ hesaba bağlandığını söyler (başkası kodu kendi hesabında onayladıysa fark edilsin). */
