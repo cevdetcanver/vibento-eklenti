@@ -20,7 +20,7 @@ Kurduktan sonra yeni bir Claude Code penceresi aç. Eklenti sekiz harflik bir ko
 - Oturum olaylarını ve süzgeçten geçmiş sohbet kaydını **senin** Vibento hesabına gönderir. Gizli değer biçimleri göndermeden önce süzülür.
 - Açılışta işinin "kaldığımız yer" bilgisini pencereye getirir, başka pencerelerden gelen mesajları iletir.
 - Bağlantı anahtarını bilgisayarında tutar (`~/.vibento/mcp-baslik.json` ve Claude Code'un eklenti deposu). Anahtar Vibento dışına gitmez.
-- Vibento araçları ilk kullanımda ayrıca izin sormaz; bu araçlar yalnız Vibento hesabına yazar, bilgisayardaki dosyalara dokunmaz.
+- Vibento araçları yalnız Vibento hesabına yazar, bilgisayardaki dosyalara dokunmaz. Okuyan araçlar izin sormaz; yazanlar Claude Code'un olağan iznini sorar.
 
 Bağlantıyı istediğin an vibento.app › Bilgisayarlar sayfasından iptal edebilirsin. Kaldırmak için: `/plugin uninstall vibento@vibento-eklenti`.
 

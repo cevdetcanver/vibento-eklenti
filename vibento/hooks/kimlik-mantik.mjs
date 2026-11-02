@@ -7,7 +7,7 @@
 // (tests/eklenti-kimlik.test.mjs) aynı girdide Node'un createHmac'iyle aynı kanıtı ölçer.
 // =====================================================================
 
-import { KIMLIK_ARACLARI, TUM_ARACLAR } from './kimlik-araclari.mjs';
+import { KIMLIK_ARACLARI, OKUMA_ARACLARI } from './kimlik-araclari.mjs';
 
 const ETIKET = 'vibento-kimlik-v1';
 const AYRAC = '.k1.';
@@ -52,14 +52,15 @@ export function vibentoAracAdi(aracAdi) {
 }
 
 /**
- * Eklentinin KENDİ araçları izin sormadan çalışır ("tek tık"; karar 2 Kas, ürün sahibinin kendi denemesinde yeniden değerlendirilecek).
+ * Yalnız eklentinin SALT OKUYAN araçları izin sormaz; yazanlar (pencereye mesaj, not, kart, görev) Claude Code'un olağan iznine kalır. Neden: enjeksiyon
+ * insan kapısı olmadan başka pencerelere ve ortak işlere yayılmasın (tarama 2 Kas Y2; karar 2 Kas, ürün sahibinin denemesinde yeniden değerlendirilecek).
  * Yalnız eklentinin tanımladığı sunucu (`mcp__plugin_vibento_vibento__`): kullanıcı düzeyi `mcp__vibento__` kullanıcının kendi izin kuralına kalır,
  * aynı adlı başka bir sunucu bu izni alamaz. Altta bir karar varsa (ask/deny/allow) ezilmez: çağıran denetler.
  */
 export function izinVerilirMi(aracAdi) {
   const onek = 'mcp__plugin_vibento_vibento__';
   // Tarama O1: yalnız önek yetmez, başka bir sunucu aynı öneki taşıyabilir; bilinen araç adıyla sınırlı.
-  return typeof aracAdi === 'string' && aracAdi.startsWith(onek) && TUM_ARACLAR.includes(aracAdi.slice(onek.length));
+  return typeof aracAdi === 'string' && aracAdi.startsWith(onek) && OKUMA_ARACLARI.includes(aracAdi.slice(onek.length));
 }
 
 /**
