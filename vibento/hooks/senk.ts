@@ -66,7 +66,7 @@ export async function istekYap(io: Io, sunucu: string, token: string, yol: strin
 
 /** Dosyanın [bas, bas+uzunluk) baytları (işletim sisteminin aracıyla) ya da null. */
 export async function dosyaOku(io: Io, dosya: string, bas: number, uzunluk: number): Promise<Uint8Array | null> {
-  const argv = pencereKomutu(dosya, bas, uzunluk)
+  const argv = pencereKomutu(dosya, bas, uzunluk, await io.sistemKlasoru().catch(() => null))
   if (!argv) return null
   const r = await io.komut(argv, 20_000)
   if (r.exitCode !== 0) return null

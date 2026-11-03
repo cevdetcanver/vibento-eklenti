@@ -23,7 +23,7 @@ export function yoklamaAraligi(n: number): number {
 
 type Bosta = { zaman: { cancel(): void } | null; n: number; kusak: number }
 
-export function uyandirmaKur(istek: Istek, kopunca?: (io: Io, jeton: string) => Promise<void>) {
+export function uyandirmaKur(istek: Istek, kopunca?: (io: Io, jeton: string) => Promise<string | null>) {
   const bostakiler = new Map<string, Bosta>()
   const uyanmalar = new Map<string, number>()
   let kusakSayaci = 0
@@ -50,7 +50,14 @@ export function uyandirmaKur(istek: Istek, kopunca?: (io: Io, jeton: string) => 
         try {
           const y = await istek(io, token, '/api/uyandirma/yokla', 'POST', { dis_seans_id: sid }, 8_000)
           if (bostakiler.get(sid)?.kusak !== b.kusak) return
-          if (y.kod === 401) { durdur(sid); await kopunca?.(io, token); return }
+          if (y.kod === 401) {
+            // Başka pencere jetonu yenilediyse bu pencere boşta kalmaz, yeni jetonla sürer (㉕ E6). Beklerken istem geldiyse yoklamayı Stop başlatır.
+            const yeni = await kopunca?.(io, token)
+            if (bostakiler.get(sid)?.kusak !== b.kusak) return
+            if (yeni) this.basla(io, yeni, sid)
+            else durdur(sid)
+            return
+          }
           if (y.kod === 404) { durdur(sid); return }
           const g = y.govde
           if (y.ok && g?.ok === true && g.acik === true && Number(g.bekleyen) > 0) {

@@ -3,7 +3,7 @@
     "vibento": {
       "type": "http",
       "url": "https://vibento.app/api/mcp",
-      "headersHelper": "cat \"$HOME/.vibento/mcp-baslik.json\" 2>/dev/null || type \"%USERPROFILE%\\.vibento\\mcp-baslik.json\""
+      "headersHelper": "cat \"${HOME:?}/.vibento/mcp-baslik.json\" 2>/dev/null || type \"%USERPROFILE%\\.vibento\\mcp-baslik.json\""
     }
   }
 }

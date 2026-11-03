@@ -12,7 +12,7 @@ import { sunucuAdresi } from './esleme-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
 import { kapiAnahtari, kapiHazirla, kapiKarari, onayKarariAyikla, onayKarariMesaji, mesajGecerli } from './kapi-mantik.mjs'
 import { aracKimligiGirdisi, izinVerilirMi, vibentoAracAdi } from './kimlik-mantik.mjs'
-import { eslemeKur } from './esleme.ts'
+import { eslemeKur, type Baglanti } from './esleme.ts'
 import { olayKur } from './olay.ts'
 import { senkKur, istekYap, type Istek } from './senk.ts'
 import { altAjanEsitle } from './altajan.ts'
@@ -29,6 +29,17 @@ export const register: Register = (on, options) => {
   const istek: Istek = (io, t, y, m, g, ms) => istekYap(io, sunucu, t, y, m, g, ms)
   // Boştaki pencere de anahtarın reddedildiğini yoklamada öğrenir: bildirim düşer, sonraki istemde kod gelir.
   const uyandirma = uyandirmaKur(istek, (io, jeton) => esleme.jetonReddedildi(io, jeton))
+  // Anahtar reddedildi: başka pencere yenilediyse olay yeni anahtarla bir kez yeniden gider, pencere boşa düşmez (tarama Ek 9 O3); değilse bağlantı silinir.
+  const ilet = async (io: Io, k: Baglanti, olay: Record<string, unknown>, ek?: Record<string, unknown>) => {
+    const y = await olaylar.ilet(io, k, olay, ek)
+    if (y !== 'reddedildi') return { y, k }
+    const yeni = await esleme.jetonReddedildi(io, k.token)
+    if (!yeni) return { y, k }
+    const taze = { ...k, token: yeni }
+    const y2 = await olaylar.ilet(io, taze, olay, ek)
+    if (y2 === 'reddedildi') await esleme.jetonReddedildi(io, yeni)
+    return { y: y2, k: taze }
+  }
 
   on('classic.SessionStart', async ($, e, next) => {
     const r = await next(e)
@@ -41,6 +52,7 @@ export const register: Register = (on, options) => {
       dizin: async (y) => (await $.fs.list(y)).map((g) => ({ name: g.name, kind: g.kind, size: g.size, mtimeMs: g.mtimeMs })),
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
+      sistemKlasoru: async () => (await $.env.get('SystemRoot')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
@@ -48,11 +60,11 @@ export const register: Register = (on, options) => {
     try {
       const kod = await esleme.acilis(io)
       if (kod) return bagla(r, kod)
-      const k = await esleme.baglantiOku(io)
-      if (!k) return r
-      const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)
+      const bagli = await esleme.baglantiOku(io)
+      if (!bagli) return r
+      const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>)
       // Anahtar reddedildi: pencere sessizce kopmasın, kod bu açılışta gelsin (eskiden ikinci bir konuşma gerekiyordu; 2 Kas ölçüldü).
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return bagla(r, await esleme.istem(io)) }
+      if (y === 'reddedildi') return bagla(r, await esleme.istem(io))
       const { baglam, oturumAdi } = acilisCiktisi(e as unknown as Record<string, unknown>, y.govde)
       // Açılış da pencereyi boşa düşürür: yeni açılan pencere de uyandırılabilir olmalı (kanca: `--dinle` Stop VE SessionStart'ta).
       const yeniNesil = e.source === 'startup' || e.source === 'resume' || e.source === 'clear'
@@ -79,6 +91,7 @@ export const register: Register = (on, options) => {
       dizin: async (y) => (await $.fs.list(y)).map((g) => ({ name: g.name, kind: g.kind, size: g.size, mtimeMs: g.mtimeMs })),
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
+      sistemKlasoru: async () => (await $.env.get('SystemRoot')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
@@ -96,8 +109,8 @@ export const register: Register = (on, options) => {
       if (hazir.onay) ek.kapi_onay = hazir.onay
       const karar = istemSinifi(e.prompt) === 'insan' ? onayKarariAyikla(ideBaglamiSoy(e.prompt)) : null
       if (karar) ek.onay_karari = karar
-      const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>, ek)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return bagla(r, (await esleme.istem(io)) ?? not) }
+      const { y } = await ilet(io, k, e as unknown as Record<string, unknown>, ek)
+      if (y === 'reddedildi') return bagla(r, (await esleme.istem(io)) ?? not)
       // Öncelik: ad kapısı > onay kararı > pencere mesajı; o turda tek çıktı (değişmez 2, 10, 13). Her hata: durdurma yok.
       const kapi = kapiKarari(hazir, y.govde, e.prompt)
       const adim = kapi.yerel
@@ -147,15 +160,16 @@ export const register: Register = (on, options) => {
       dizin: async (y) => (await $.fs.list(y)).map((g) => ({ name: g.name, kind: g.kind, size: g.size, mtimeMs: g.mtimeMs })),
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
+      sistemKlasoru: async () => (await $.env.get('SystemRoot')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
     try {
-      const k = await esleme.baglantiOku(io)
-      if (!k) return r
-      const y = await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)
-      if (y === 'reddedildi') { await esleme.jetonReddedildi(io, k.token); return r }
+      const bagli = await esleme.baglantiOku(io)
+      if (!bagli) return r
+      const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>)
+      if (y === 'reddedildi') return r
       // Sohbet kaydı arka planda (tur beklemez); aynı dosyada ikinci eşitleme başlamaz (senk.ts).
       // Pencere boşa düştü: uyandırma yoklaması başlar (Realtime yerine; mod ortamında WebSocket yok).
       uyandirma.basla(io, k.token, e.session_id)
@@ -182,6 +196,7 @@ export const register: Register = (on, options) => {
       dizin: async (y) => (await $.fs.list(y)).map((g) => ({ name: g.name, kind: g.kind, size: g.size, mtimeMs: g.mtimeMs })),
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
+      sistemKlasoru: async () => (await $.env.get('SystemRoot')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
@@ -209,6 +224,7 @@ export const register: Register = (on, options) => {
       dizin: async (y) => (await $.fs.list(y)).map((g) => ({ name: g.name, kind: g.kind, size: g.size, mtimeMs: g.mtimeMs })),
       istemGonder: (t) => $.prompt.submit({ text: t }),
       evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
+      sistemKlasoru: async () => (await $.env.get('SystemRoot')) ?? null,
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
@@ -218,9 +234,9 @@ export const register: Register = (on, options) => {
       const kAnahtar = kapiAnahtari(e.session_id)
       if (kAnahtar) await io.depoSil(kAnahtar)
       const k = await esleme.baglantiOku(io)
-      if (k && (await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)) === 'reddedildi') await esleme.jetonReddedildi(io, k.token)
-      // Kapanışta kısa bütçe (bugünkü kanca 1 sn): kalan, bir sonraki açılışın Stop'unda sunucunun ofsetinden sürer.
-      else if (k) await senk.senkYap(io, k.token, e.transcript_path, e.session_id, e.cwd, 1_500)
+      // Kapanışta kısa bütçe (bugünkü kanca 1 sn): kalan, bir sonraki açılışın Stop'unda sunucunun ofsetinden sürer. Anahtar reddedildiyse iş de
+      // sonraki açılışa kalır: kapanan pencereyi bekletmeye değmez, kopma duyurusunu görecek kimse yok.
+      if (k && (await olaylar.ilet(io, k, e as unknown as Record<string, unknown>)) !== 'reddedildi') await senk.senkYap(io, k.token, e.transcript_path, e.session_id, e.cwd, 1_500)
     } catch {
       // fail-open
     }

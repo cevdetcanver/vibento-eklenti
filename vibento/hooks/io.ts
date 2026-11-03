@@ -23,6 +23,7 @@ export type Io = {
   dizin(yol: string): Promise<{ name: string; kind: string; size: number; mtimeMs: number }[]>
   istemGonder(metin: string): Promise<unknown>
   evKlasoru(): Promise<string | null>
+  sistemKlasoru(): Promise<string | null>
   dosyaYaz(yol: string, metin: string): Promise<void>
   dosyaOku(yol: string): Promise<string>
   mcpBagla(): Promise<void>

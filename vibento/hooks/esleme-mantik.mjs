@@ -9,7 +9,7 @@
 
 export const ISTEMCI = 'claude-code';
 // `.claude-plugin/plugin.json` sürümüyle aynı (test denetler); sunucuya `istemci_surum` olarak gider.
-export const SURUM = '0.1.4';
+export const SURUM = '0.1.5';
 export const BAGLANTI_ANAHTARI = 'vibento.baglanti';
 export const ESLEME_ANAHTARI = 'vibento.esleme';
 export const VARSAYILAN_SUNUCU = 'https://vibento.app';
@@ -55,14 +55,20 @@ function json(metin) {
   }
 }
 
+/** Doğrulama adresi yalnız bağlanılan sunucunun `/bagla` sayfası: ele geçirilmiş yanıt kullanıcıyı başka yere yönlendiremez, satıra metin taşıyamaz (tarama Ek 8 O4, Ek 9 D5). */
+function dogrulamaAdresi(deger, sunucu) {
+  return deger === `${new URL(sunucu).origin}/bagla` ? deger : null;
+}
+
 /**
  * `POST /api/esleme/baslat` yanıtı → { tur: 'kod', … } | { tur: 'sinir' } | { tur: 'hata' }.
  * @param {number} durum
  * @param {string} metin
+ * @param {string} [sunucu]
  * @returns {{ tur: 'kod', kullanici_kodu: string, cihaz_kodu: string, bitis: string, aralik: number, dogrulama_adresi: string | null }
  *   | { tur: 'sinir' } | { tur: 'hata' }}
  */
-export function baslatYanitiOku(durum, metin) {
+export function baslatYanitiOku(durum, metin, sunucu = VARSAYILAN_SUNUCU) {
   const v = json(metin);
   if (durum === 429) return { tur: 'sinir' };
   if (durum !== 200 || !v || v.ok !== true) return { tur: 'hata' };
@@ -71,8 +77,7 @@ export function baslatYanitiOku(durum, metin) {
   const bitis = Date.parse(String(v.bitis));
   if (!Number.isFinite(bitis)) return { tur: 'hata' };
   const aralik = Math.max(EN_KISA_ARALIK_SN, Number.isFinite(Number(v.aralik)) ? Math.floor(Number(v.aralik)) : EN_KISA_ARALIK_SN);
-  const adres = typeof v.dogrulama_adresi === 'string' && /^https?:\/\/[^\s]+$/.test(v.dogrulama_adresi) ? v.dogrulama_adresi : null;
-  return { tur: 'kod', kullanici_kodu: v.kullanici_kodu, cihaz_kodu: v.cihaz_kodu, bitis: new Date(bitis).toISOString(), aralik, dogrulama_adresi: adres };
+  return { tur: 'kod', kullanici_kodu: v.kullanici_kodu, cihaz_kodu: v.cihaz_kodu, bitis: new Date(bitis).toISOString(), aralik, dogrulama_adresi: dogrulamaAdresi(v.dogrulama_adresi, sunucu) };
 }
 
 /**
@@ -123,11 +128,19 @@ export function bekleyenYoklanabilir(bekleyen, sunucu, simdi) {
   return Number.isFinite(bitis) && bitis + TESLIM_EK_MS > simdi;
 }
 
-/** Yoklanacak cihaz kodları: geçerli kod ve yerine yenisi istenmiş ama hâlâ teslim edilebilen eski kod. */
-export function yoklanacakKodlar(bekleyen, simdi) {
-  const kodlar = [bekleyen.cihaz_kodu];
-  const o = bekleyen.onceki;
-  if (o && typeof o.cihaz_kodu === 'string' && CIHAZ_KODU.test(o.cihaz_kodu) && Date.parse(String(o.bitis)) + TESLIM_EK_MS > simdi) kodlar.push(o.cihaz_kodu);
+/**
+ * Yoklanacak cihaz kodları: depodaki kod, yerine yenisi istenmiş ama hâlâ teslim edilebilen eski kod ve bu pencerenin kendi kodu. İki sekme aynı
+ * anda kod isterse sonra yazan öncekini ezer; kullanıcı ezilen kodu görmüş olabilir, sahibi yoklamazsa onaylanan kod teslim alınmaz (㉕ E5).
+ * @param {any} bekleyen
+ * @param {number} simdi
+ * @param {{ cihaz_kodu: string, bitis: string } | null} [kendi]
+ * @returns {string[]}
+ */
+export function yoklanacakKodlar(bekleyen, simdi, kendi = null) {
+  const kodlar = bekleyen ? [bekleyen.cihaz_kodu] : [];
+  for (const o of [bekleyen?.onceki, kendi]) {
+    if (o && typeof o.cihaz_kodu === 'string' && CIHAZ_KODU.test(o.cihaz_kodu) && Date.parse(String(o.bitis)) + TESLIM_EK_MS > simdi && !kodlar.includes(o.cihaz_kodu)) kodlar.push(o.cihaz_kodu);
+  }
   return kodlar;
 }
 

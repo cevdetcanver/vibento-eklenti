@@ -52,11 +52,20 @@ export function windowsYolu(dosya) {
 }
 
 /**
+ * Windows sistem aracının mutlak yolu (tarama D2: çıplak ad ev klasöründeki aynı adlı dosyayı çalıştırabilir). `kok` Windows'ta `SystemRoot`; yoksa ya da
+ * mutlak değilse `yedek` (Mac ve Linux'ta çıplak ad çalışma klasörüne bakmaz).
+ */
+export function sistemKomutu(kok, goreli, yedek) {
+  if (typeof kok !== 'string' || !/^[A-Za-z]:[\\/]/.test(kok) || DENETIM.test(kok) || /(^|[\\/])\.\.([\\/]|$)/.test(kok)) return yedek;
+  return `${kok.replace(/[\\/]+$/, '')}\\System32\\${goreli}`;
+}
+
+/**
  * Dosyanın [bas, bas+uzunluk) bayt aralığını base64 olarak stdout'a yazan komut (argv). Geçersiz girdide null.
  * Windows: PowerShell `-EncodedCommand` (UTF-16LE base64; yol ayrıca base64). Paylaşım ReadWrite+Delete: Claude Code
  * dosyaya yazmayı sürdürürken okunur. Diğerleri: `/bin/sh -c 'tail -c +N "$1" | head -c M | base64 | tr -d "\n"'`, yol konumsal argüman.
  */
-export function pencereKomutu(dosya, bas, uzunluk) {
+export function pencereKomutu(dosya, bas, uzunluk, /** @type {string | null} */ sistemKoku = null) {
   if (typeof dosya !== 'string' || dosya.length === 0 || dosya.length > 1024 || DENETIM.test(dosya)) return null;
   if (!Number.isSafeInteger(bas) || bas < 0 || !Number.isSafeInteger(uzunluk) || uzunluk <= 0 || uzunluk > PENCERE_TAVANI) return null;
   if (windowsYolu(dosya)) {
@@ -72,7 +81,7 @@ export function pencereKomutu(dosya, bas, uzunluk) {
       + '[Console]::Out.Write([Convert]::ToBase64String($b,0,$t))}finally{$f.Dispose()}';
     const utf16 = new Uint8Array(betik.length * 2);
     for (let i = 0; i < betik.length; i += 1) { const k = betik.charCodeAt(i); utf16[i * 2] = k & 255; utf16[i * 2 + 1] = k >> 8; }
-    return ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', base64Yaz(utf16)];
+    return [sistemKomutu(sistemKoku, 'WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe'), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', base64Yaz(utf16)];
   }
   return ['/bin/sh', '-c', 'tail -c +"$2" "$1" | head -c "$3" | base64 | tr -d "\\n"', 'sh', dosya, String(bas + 1), String(uzunluk)];
 }
