@@ -1,0 +1,19 @@
+{
+  "name": "vibento-eklenti",
+  "description": "Vibento — Claude Code oturumlarını Vibento işlerine bağlar: kaldığın yer, günlük, pencereler arası mesaj.",
+  "owner": {
+    "name": "Vibento",
+    "url": "https://vibento.app"
+  },
+  "plugins": [
+    {
+      "name": "vibento",
+      "description": "Vibento — Claude Code oturumlarını Vibento işlerine bağlar: kaldığın yer, günlük, pencereler arası mesaj.",
+      "source": {
+        "source": "archive",
+        "url": "https://raw.githubusercontent.com/cevdetcanver/vibento-eklenti/main/raf/vibento-0.1.4.zip",
+        "sha256": "e13d6e6231646f4ace6acfe10c69b84c20339d87f0c1e20b32fd485bcf54ad8a"
+      }
+    }
+  ]
+}
