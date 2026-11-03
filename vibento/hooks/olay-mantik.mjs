@@ -6,6 +6,8 @@
 // kanca testlerinin beklentilerini tekrarlar. Değişmez 4: istem ve yanıt METNİ gövdeye girmez (yalnız uzunluk, tür, önek).
 // =====================================================================
 
+import { SURUM } from './esleme-mantik.mjs';
+
 // Eklenti bugünkü kancanın 24. sürümüyle aynı özellik sözleşmesini taşır (sunucu özellikleri sayısal sürümle açar: ≥14 pencere mesajı,
 // ≥16 uyandırma alanı, ≥20 istem öneki, ≥22 onay kararı). Bütün dilimler bitmeden eklenti dağıtılmaz.
 export const HOOK_SURUM = '24';
@@ -127,6 +129,7 @@ export function govdeKur(olay, ek) {
     if (ad !== null) govde.pencere_adi = ad;
   }
   if (govde.olay === 'Stop' && typeof olay.stop_hook_active === 'boolean') govde.stop_hook_active = olay.stop_hook_active;
+  if (govde.olay === 'SessionStart') govde.eklenti_surum = SURUM;
   if (govde.olay === 'SessionStart' && typeof ek.claude_surum === 'string' && /^\d+\.\d+\.\d+$/.test(ek.claude_surum)) {
     govde.claude_surum = ek.claude_surum;
   }
