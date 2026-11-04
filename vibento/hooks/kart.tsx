@@ -9,7 +9,7 @@
 
 import { atom, memberOf, read, update } from 'claude-code'
 import type { On } from 'claude-code'
-import { KART_DEPO_ANAHTARI, ajanGoster, bantRengi, dugmeIzni, duzMetin, kartDugmeIzni, kartPlani, kaynakBul, metinBol, soruGirisi, temizGoster, toplamCevap } from './kart-mantik.mjs'
+import { KART_DEPO_ANAHTARI, NEDEN_BICIM, ajanGoster, bantRengi, dugmeIzni, dugmeYokNedeni, duzMetin, kartAnahtari, kartDugmeIzni, kartPlani, kaynakBul, metinBol, soruGirisi, temizGoster, toplamCevap } from './kart-mantik.mjs'
 import { uyandirmaMetniMi } from './olay-mantik.mjs'
 import { sunucuAdresi } from './esleme-mantik.mjs'
 
@@ -27,6 +27,8 @@ const sonKartlar = atom({ plugin: 'vibento', key: 'sonKartlar' } as const, [])
 const cevaplananlar = atom({ plugin: 'vibento', key: 'cevaplananlar' } as const, [])
 const acikSoruDurumu = atom({ plugin: 'vibento', key: 'acikSoruDurumu' } as const, { acikSoru: '', soruMesajli: '' })
 const CEVAP_TAVANI = 100
+// Bunu geçen soru tek satıra sığmaz: yazı tam genişlikte, düğmeler altında (4 Kas gerçek kullanım).
+const YAN_YANA_SORU = 60
 const ONAY_ADRESI = `${sunucuAdresi(undefined)}/onaylar`
 
 // Çift basış ve çizim arası: aynı kart ikinci kez göndermez.
@@ -116,9 +118,17 @@ export const kartKaydet = (on: On) => {
       const kaynakBilgi = kaynak ? kaynakBul(durum.kaynaklar, kaynak.pencere, kaynak.kimlik, kaynak.ajan) : null
       // Kapanışın cevap anahtarı: başka pencerenin sorusunda kimliği, kendi sorusunda metni. Model yineleyince aynı soruya ikinci cevap gitmesin.
       const kapanisAnahtari = kaynak?.kimlik ?? kapanis?.soru ?? ''
+      const sonSoruDegeri = kapanis ? await read($, sonSoru) : ''
+      // Eski satır yalnız bir değere abone kalır: tur başına gereksiz yeniden çizim olmasın (tarama Ek 20 D4).
+      const sonYanit = kapanis !== null && sonSoruDegeri === kapanis.tam
+      const mesajliDeger = sonYanit ? await read($, mesajliTur) : false
+      const acikSoruDegeri = sonYanit ? (await read($, acikSoruDurumu)).acikSoru : ''
       const dugme = kapanis?.sorular && !cevaplanan.includes(kapanisAnahtari)
-        ? dugmeIzni(kapanis, kaynakBilgi, await read($, sonSoru), await read($, mesajliTur), (await read($, acikSoruDurumu)).acikSoru)
+        ? dugmeIzni(kapanis, kaynakBilgi, sonSoruDegeri, mesajliDeger, acikSoruDegeri)
         : false
+      const dugmeNedeni = kapanis && !dugme && !verilen && !cevaplanan.includes(kapanisAnahtari)
+        ? dugmeYokNedeni(kapanis, kaynakBilgi, sonSoruDegeri, mesajliDeger, acikSoruDegeri)
+        : null
       const dogrulanmamis = kaynak !== null && kaynakBilgi?.dogrulandi !== true
       const kapanisSorulari = dugme && kapanis?.sorular ? kapanis.sorular : []
       const kartAnahtar = (i: number) => `k${i}`
@@ -180,6 +190,21 @@ export const kartKaydet = (on: On) => {
           />
         )
       })
+      const soruSatiri = (anahtar: string, yazi: string, dugmeler: ReturnType<typeof secenekDugmeleri>) => (
+        yazi.length > YAN_YANA_SORU
+          ? (
+            <Box key={anahtar} flexDirection="column" gap={1}>
+              <Text>{yazi}</Text>
+              <Box flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">{dugmeler}</Box>
+            </Box>
+          )
+          : (
+            <Box key={anahtar} flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
+              {yazi ? <Text>{yazi}</Text> : null}
+              {dugmeler}
+            </Box>
+          )
+      )
       const gonderDugmesi = gonderHazir && !verilen
         ? <Button key="gonder" variant="primary" label="Gönder" onPress={() => gonder(toplamCevap(seciliKart, kapanisTam ? seciliSoru : null, kaynak?.kimlik ?? null), [...seciliKart.map((k) => k.kimlik), ...(kapanisTam ? [kapanisAnahtari] : [])])} />
         : null
@@ -218,16 +243,14 @@ export const kartKaydet = (on: On) => {
                 {bant(p.pencere, ajan, ek, k.dogrulandi ? k.renk : null, k.dogrulandi)}
                 <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
                   {kartSoru
-                    ? (
-                      <Box flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
-                        {kartSoru.metin ? <Text>{duzMetin(temizGoster(kartSoru.metin))}</Text> : null}
-                        {secenekDugmeleri(kartAnahtar(i), `k${i}`, kartSoru, (etiket) => toplamCevap([{ kimlik: p.kimlik ?? '', secim: [etiket] }], null), p.kimlik ? [p.kimlik] : [])}
-                      </Box>
-                    )
+                    ? soruSatiri(`ks${i}`, duzMetin(temizGoster(kartSoru.metin)), secenekDugmeleri(kartAnahtar(i), `k${i}`, kartSoru, (etiket) => toplamCevap([{ kimlik: p.kimlik ?? '', secim: [etiket] }], null), p.kimlik ? [p.kimlik] : []))
                     : <Markdown text={temizGoster(p.metin)} />}
                   {p.etiket === 'ONAY İSTİYOR' && k.dogrulandi ? onaySatiri() : null}
                   {!verilen && p.etiket === 'SORU' && p.kimlik && cevaplanan.includes(p.kimlik)
                     ? <Text dimColor>Bu soruya cevap verildi; yeni soruysa yazarak cevapla.</Text>
+                    : null}
+                  {!verilen && p.etiket === 'SORU' && k.dogrulandi && !p.sorular && !cevaplanan.includes(p.kimlik ?? '') && sonK.includes(kartAnahtari(p))
+                    ? <Text dimColor>{NEDEN_BICIM}</Text>
                     : null}
                 </Box>
               </Box>
@@ -255,14 +278,12 @@ export const kartKaydet = (on: On) => {
                   {!verilen && kaynak?.etiket !== 'ONAY İSTİYOR' && cevaplanan.includes(kapanisAnahtari)
                     ? <Text dimColor>Bu soruya cevap verildi; yeni soruysa yazarak cevapla.</Text>
                     : null}
+                  {dugmeNedeni ? <Text dimColor>{dugmeNedeni}</Text> : null}
                   {dugme && !verilen && kapanis.sorular
-                    ? kapanis.sorular.map((s, si) => (
-                      <Box key={`s${si}`} flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
-                        {s.metin || (kapanis.sorular?.length ?? 0) > 1
-                          ? <Text>{(kapanis.sorular?.length ?? 0) > 1 ? `${si + 1}. ` : ''}{duzMetin(temizGoster(s.metin))}</Text>
-                          : null}
-                        {secenekDugmeleri(String(si), `s${si}`, s, (etiket) => toplamCevap([], [[etiket]]), [kapanisAnahtari])}
-                      </Box>
+                    ? kapanis.sorular.map((s, si) => soruSatiri(
+                      `s${si}`,
+                      `${(kapanis.sorular?.length ?? 0) > 1 ? `${si + 1}. ` : ''}${duzMetin(temizGoster(s.metin))}`,
+                      secenekDugmeleri(String(si), `s${si}`, s, (etiket) => toplamCevap([], [[etiket]]), [kapanisAnahtari]),
                     ))
                     : null}
                   {kapanis.gorunur ? <Markdown dimColor text={temizGoster(kapanis.gorunur)} /> : null}

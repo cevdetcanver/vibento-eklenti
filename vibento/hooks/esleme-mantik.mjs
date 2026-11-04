@@ -9,7 +9,7 @@
 
 export const ISTEMCI = 'claude-code';
 // `.claude-plugin/plugin.json` sürümüyle aynı (test denetler); sunucuya `istemci_surum` olarak gider.
-export const SURUM = '0.1.11';
+export const SURUM = '0.1.12';
 export const BAGLANTI_ANAHTARI = 'vibento.baglanti';
 export const ESLEME_ANAHTARI = 'vibento.esleme';
 export const VARSAYILAN_SUNUCU = 'https://vibento.app';

@@ -27,7 +27,7 @@ const tirnaksiz = (s) => s.replace(TIRNAK_CIFTI, '$1');
 const soruYasakMi = (s) => SORU_YASAK.test(tirnaksiz(s));
 // Türkçe ek apostrofla yazılıyor ("Google'u bekleyelim", 4 Kas gerçek yanıt).
 const SECENEK_ETIKETI = /^[\p{L}\p{N} '\u2019-]{1,40}$/u;
-const SECENEK_SATIRI = /^(?:\d{1,2}[.)]\s+)?(.{1,200}?)\s*\[([^[\]]{1,300})\]\s*[.?!]?\s*$/u;
+const SECENEK_SATIRI = /^(?:\d{1,2}[.)]\s+)?(.{1,400}?)\s*\[([^[\]]{1,300})\]\s*[.?!]?\s*$/u;
 const EVET_HAYIR = /\bevet\s*(?:\/|ya da|veya)\s*hayır\s*[.?!]?\s*$/iu;
 // Soru ile İz arasında yalnız bilinen Park satırı ayrılır (4 Kas gerçek yanıt). İzin listesi: serbest etikette asıl içerik düğmenin dışına kaçar (tarama Ek 18 O1).
 const PARK_SATIRI = /^\*\*Park(?: \(konuşulacak\))?:\*\*/u;
@@ -42,6 +42,9 @@ const KOD_ACILIS = /^([ \t]*)(`{3,}|~{3,})([^`\n]*)$/;
 const KOD_KAPANIS = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
 const KOD_KUTU_TAVANI = 200;
 const SORU_SATIR_TAVANI = 400;
+// Bunu geçen metin soru işareti taşımak zorunda: soru işaretsiz uzun metin emirdir, tek tıkla evet verilmez (tarama Ek 20 O1).
+const UZUN_METIN = 200;
+const ETIKET_ICI = /· (?:SORU|ONAY İSTİYOR|BİLGİ)(?: · [0-9a-f]{6})?:/u;
 const SORU_ISARETI = /[?\uFF1F\u061F\uFE56\uFE16\u2047-\u2049\u037E\u055E\u1367\uA60F\u2753\u2754\u2E2E\u00BF]/g;
 const KOD_TEMIZLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]|[^\P{Cc}\t\n]/gu;
 
@@ -150,10 +153,10 @@ export function secenekCoz(soru) {
   if (satirlar.some((s) => s.length > SORU_SATIR_TAVANI || GORUNMEZ.test(s) || soruYasakMi(s))) return null;
   // Ters tırnak düz çizilir: numara, pencere etiketi ve evet/hayır tırnak ardına saklanıp kapılardan geçmesin (tarama Ek 18 ek tur N1-N3).
   const duzSatirlar = satirlar.map(tirnaksiz);
-  if (duzSatirlar.some((s, i) => SORU_ETIKETI.test(s) || (/^\d{1,2}[.)]\s/.test(s) && !/^\d{1,2}[.)]\s/.test(satirlar[i])))) return null;
+  if (duzSatirlar.some((s, i) => SORU_ETIKETI.test(s) || ETIKET_ICI.test(s) || (/^\d{1,2}[.)]\s/.test(s) && !/^\d{1,2}[.)]\s/.test(satirlar[i])))) return null;
   if (satirlar.length === 1 && EVET_HAYIR.test(satirlar[0]) && !/^\d{1,2}[.)]\s/.test(satirlar[0])) {
     const metin = satirlar[0].replace(EVET_HAYIR, '').trim();
-    if (metin.length === 0 || metin.length > 200 || soruSayisi(metin) > 1) return null;
+    if (metin.length === 0 || soruSayisi(metin) > 1 || (metin.length > UZUN_METIN && soruSayisi(metin) === 0)) return null;
     return [{ metin, secenekler: ['Evet', 'Hayır'], coklu: false }];
   }
   const govde = satirlar.length > 1 && !SECENEK_SATIRI.test(satirlar[0]) && !/^\d{1,2}[.)]\s/.test(satirlar[0]) ? satirlar.slice(1) : satirlar;
@@ -169,12 +172,12 @@ export function secenekCoz(soru) {
     const numara = numaralar[i];
     if (numara && EVET_HAYIR.test(s)) {
       const metin = s.slice(numara[0].length).replace(EVET_HAYIR, '').trim();
-      if (metin.length === 0 || metin.length > 200 || soruSayisi(metin) > 1) return null;
+      if (metin.length === 0 || soruSayisi(metin) > 1 || (metin.length > UZUN_METIN && soruSayisi(metin) === 0)) return null;
       sorular.push({ metin, secenekler: ['Evet', 'Hayır'], coklu: false });
       continue;
     }
     const e = SECENEK_SATIRI.exec(s);
-    if (!e || soruSayisi(e[1]) > 1) return null;
+    if (!e || !e[1].trim() || soruSayisi(e[1]) > 1 || (e[1].length > UZUN_METIN && soruSayisi(e[1]) === 0)) return null;
     const coklu = e[2].includes(' + ');
     const secenekler = e[2].split(coklu ? ' + ' : ' | ').map((x) => x.trim());
     if (secenekler.length < 2 || secenekler.length > EN_COK_SECENEK) return null;
@@ -222,6 +225,34 @@ export function dugmeIzni(kapanis, kaynakBilgi, sonSoru, mesajliTur, acikSoru = 
   if (!sonSoru || sonSoru !== kapanis.tam) return false;
   if (kapanis.kaynak) return kaynakBilgi?.dogrulandi === true && kapanis.kaynak.etiket !== 'ONAY İSTİYOR';
   return !mesajliTur || (acikSoru !== '' && acikSoru === kapanis.tam);
+}
+
+export const NEDEN_BICIM = 'Düğme biçiminde değil; yazarak cevapla.';
+// "Yeniden sordur" denmez: soru kişinin turuna geçince kaynak işareti kaybolur, koruma kişinin eliyle kalkar (tarama Ek 20 D2).
+export const NEDEN_MESAJ = 'Bu turda başka pencereden mesaj geldi, düğme yok; yazarak cevapla.';
+// "Yazarak cevapla" denmez: kaynağı belli olmayan isteğe cevabı ürünün sesiyle önermek olur (tarama Ek 20 O2).
+export const NEDEN_KAYNAK = 'Kaynak doğrulanamadı: bunu kimin yazdığı belli değil, düğme yok.';
+
+/**
+ * Düğme neden yok: kart söylemezse aynı pencerede rastgele görünür (4 Kas gerçek kullanım). Yalnız son yanıtta; eski satır ve akış sessiz.
+ * Onay isteğinin kendi satırı var, burada söylenmez.
+ * @param {{ tam: string, sorular: unknown[] | null, kaynak: { etiket: string } | null }} kapanis
+ * @param {{ dogrulandi: boolean } | null} kaynakBilgi
+ * @param {string} sonSoru
+ * @param {boolean} mesajliTur
+ * @param {string} [acikSoru]
+ * @returns {string | null}
+ */
+export function dugmeYokNedeni(kapanis, kaynakBilgi, sonSoru, mesajliTur, acikSoru = '') {
+  if (!sonSoru || sonSoru !== kapanis.tam) return null;
+  if (kapanis.kaynak) {
+    if (kapanis.kaynak.etiket === 'ONAY İSTİYOR' || kapanis.kaynak.etiket === 'BİLGİ') return null;
+    if (kaynakBilgi?.dogrulandi !== true) return NEDEN_KAYNAK;
+  } else if (mesajliTur && (acikSoru === '' || acikSoru !== kapanis.tam)) {
+    // Biçimden önce: mesajlı turda asıl uyarı budur (tarama Ek 20 D1).
+    return NEDEN_MESAJ;
+  }
+  return kapanis.sorular ? null : NEDEN_BICIM;
 }
 
 /**
