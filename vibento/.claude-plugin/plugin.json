@@ -1,11 +1,12 @@
 {
   "name": "vibento",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Vibento — Claude Code oturumlarını Vibento işlerine bağlar: kaldığın yer, günlük, pencereler arası mesaj.",
   "author": {
     "name": "Vibento",
     "url": "https://vibento.app"
   },
   "homepage": "https://vibento.app",
-  "icon": "./assets/icon.png"
+  "icon": "./assets/icon.png",
+  "types": "./types/index.d.ts"
 }

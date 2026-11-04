@@ -10,6 +10,8 @@ import type { Register } from 'claude-code'
 import type { Io } from './io.ts'
 import { sunucuAdresi } from './esleme-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
+import { KART_DEPO_ANAHTARI, kartDurumu } from './kart-mantik.mjs'
+import { kartKaydet } from './kart.tsx'
 import { kapiAnahtari, kapiHazirla, kapiKarari, onayKarariAyikla, onayKarariMesaji, mesajGecerli } from './kapi-mantik.mjs'
 import { aracKimligiGirdisi, izinVerilirMi, vibentoAracAdi } from './kimlik-mantik.mjs'
 import { eslemeKur, type Baglanti } from './esleme.ts'
@@ -18,10 +20,19 @@ import { senkKur, istekYap, type Istek } from './senk.ts'
 import { altAjanEsitle } from './altajan.ts'
 import { uyandirmaKur } from './uyandirma.ts'
 
+// Kart anahtarı ve renkler (docs/sozlesme-pencere-kartlari.md): yalnız değişince yazılır; hata turu bozmaz.
+const kartDurumuYaz = async (io: Io, govde: unknown, baglantiId: string | undefined) => {
+  try {
+    const yeni = kartDurumu(await io.depoOku(KART_DEPO_ANAHTARI), govde, baglantiId)
+    if (yeni) await io.depoYaz(KART_DEPO_ANAHTARI, yeni)
+  } catch { /* kart görünümdür, olay akışını durdurmaz */ }
+}
+
 const bagla = (r: { additionalContext?: string[] }, satir: string | null) =>
   satir ? { ...r, additionalContext: [...(r.additionalContext ?? []), satir] } : r
 
 export const register: Register = (on, options) => {
+  kartKaydet(on)
   const sunucu = sunucuAdresi(options.sunucu)
   const esleme = eslemeKur(sunucu)
   const olaylar = olayKur(sunucu)
@@ -32,12 +43,16 @@ export const register: Register = (on, options) => {
   // Anahtar reddedildi: başka pencere yenilediyse olay yeni anahtarla bir kez yeniden gider, pencere boşa düşmez (tarama Ek 9 O3); değilse bağlantı silinir.
   const ilet = async (io: Io, k: Baglanti, olay: Record<string, unknown>, ek?: Record<string, unknown>) => {
     const y = await olaylar.ilet(io, k, olay, ek)
-    if (y !== 'reddedildi') return { y, k }
+    if (y !== 'reddedildi') {
+      await kartDurumuYaz(io, y.govde, k.baglanti_id)
+      return { y, k }
+    }
     const yeni = await esleme.jetonReddedildi(io, k.token)
     if (!yeni) return { y, k }
     const taze = { ...k, token: yeni }
     const y2 = await olaylar.ilet(io, taze, olay, ek)
     if (y2 === 'reddedildi') await esleme.jetonReddedildi(io, yeni)
+    else await kartDurumuYaz(io, y2.govde, k.baglanti_id)
     return { y: y2, k: taze }
   }
 

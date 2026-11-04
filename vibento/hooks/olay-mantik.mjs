@@ -198,7 +198,8 @@ export const BAGLAM_CERCEVESI = 'Vibento bağlamı: bu metin sunucudan gelen iş
 
 /**
  * SessionStart çıktısı (01-bas.mjs baglamiBas): bağlam (boş değilse) + pencere adı (yalnız kaynak startup/resume/fork, girdide ad YOK ve
- * sunucunun oturum_adi'si boş değilse; kullanıcının adının üstüne ASLA yazılmaz).
+ * sunucunun oturum_adi'si boş değilse; kullanıcının adının üstüne ASLA yazılmaz). İstisna (BACKLOG ⑱): ad, işin ya da bölümün sitede değişmiş ESKİ adıysa sunucu
+ * `pencere_adi_guncel` verir, yeni ad basılır; bu kullanıcının adı değil, eski resmî addır. Sunucu eşleşmeden göndermez.
  * @returns {{ baglam: string | null, oturumAdi: string | null }}
  */
 export function acilisCiktisi(olay, govde) {
@@ -206,6 +207,10 @@ export function acilisCiktisi(olay, govde) {
   const baglam = typeof govde.baglam === 'string' && govde.baglam.length > 0 ? `${BAGLAM_CERCEVESI}\n${govde.baglam}` : null;
   const kaynakUygun = ['startup', 'resume', 'fork'].includes(olay.source);
   const adVar = typeof olay.session_title === 'string' && olay.session_title.trim().length > 0;
+  const guncel = typeof govde.pencere_adi_guncel === 'string' && govde.pencere_adi_guncel.trim().length > 0 ? govde.pencere_adi_guncel : null;
+  // Sunucu ele geçse de yalnız aynı biçimde kısa bir ad yazılabilir: tek satır, 80 kod noktası, parça sayısı aynı (tarama Ek 11 D15).
+  if (kaynakUygun && adVar && guncel && Array.from(guncel).length <= 80 && !/[\p{Cc}\p{Cf}]/u.test(guncel)
+    && guncel.split(' - ').length === olay.session_title.split(' - ').length) return { baglam, oturumAdi: guncel };
   const oturumAdi = kaynakUygun && !adVar && typeof govde.oturum_adi === 'string' && govde.oturum_adi.trim().length > 0
     ? govde.oturum_adi : null;
   return { baglam, oturumAdi };
