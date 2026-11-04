@@ -126,7 +126,7 @@ export const kartKaydet = (on: On) => {
       const dugme = kapanis?.sorular && !cevaplanan.includes(kapanisAnahtari)
         ? dugmeIzni(kapanis, kaynakBilgi, sonSoruDegeri, mesajliDeger, acikSoruDegeri)
         : false
-      const dugmeNedeni = kapanis && !dugme && !verilen && !cevaplanan.includes(kapanisAnahtari)
+      const dugmeNedeni = kapanis && !verilen && !cevaplanan.includes(kapanisAnahtari)
         ? dugmeYokNedeni(kapanis, kaynakBilgi, sonSoruDegeri, mesajliDeger, acikSoruDegeri)
         : null
       const dogrulanmamis = kaynak !== null && kaynakBilgi?.dogrulandi !== true
@@ -137,11 +137,12 @@ export const kartKaydet = (on: On) => {
         const secim = secili[kartAnahtar(i)] ?? []
         return secim.length > 0 ? [{ kimlik: p.kimlik ?? '', secim }] : []
       })
-      const kapanisTam = kapanisSorulari.length > 0 && seciliSoru.every((s) => s.length > 0)
+      const dugmeliSorular = kapanisSorulari.flatMap((s, si) => (s.secenekler.length > 0 ? [{ s, si }] : []))
+      const kapanisTam = dugmeliSorular.length > 0 && dugmeliSorular.every(({ si }) => (seciliSoru[si] ?? []).length > 0)
       const kapanisBos = seciliSoru.every((s) => s.length === 0)
-      const toplamSoru = dugmeliKartlar.length + kapanisSorulari.length
+      const toplamSoru = dugmeliKartlar.length + dugmeliSorular.length
       // Tek soru tek seçimse basınca gider; gerisi işaretlenir, tek Gönder. Kartlardan yalnız bazısına cevap verilebilir, kapanış sorusu yarım gitmez.
-      const hemenGider = toplamSoru === 1 && seciliKart.length === 0 && kapanisBos && !(dugmeliKartlar[0]?.p.sorular?.[0]?.coklu ?? kapanisSorulari[0]?.coklu ?? false)
+      const hemenGider = toplamSoru === 1 && seciliKart.length === 0 && kapanisBos && !(dugmeliKartlar[0]?.p.sorular?.[0]?.coklu ?? dugmeliSorular[0]?.s.coklu ?? false)
       const gonderHazir = !hemenGider && (kapanisTam || (seciliKart.length > 0 && kapanisBos))
 
       const gonder = async (metin: string, kimlikler: string[]) => {
@@ -191,7 +192,7 @@ export const kartKaydet = (on: On) => {
         )
       })
       const soruSatiri = (anahtar: string, yazi: string, dugmeler: ReturnType<typeof secenekDugmeleri>) => (
-        yazi.length > YAN_YANA_SORU
+        yazi.length > YAN_YANA_SORU && dugmeler.length > 0
           ? (
             <Box key={anahtar} flexDirection="column" gap={1}>
               <Text>{yazi}</Text>
@@ -283,7 +284,7 @@ export const kartKaydet = (on: On) => {
                     ? kapanis.sorular.map((s, si) => soruSatiri(
                       `s${si}`,
                       `${(kapanis.sorular?.length ?? 0) > 1 ? `${si + 1}. ` : ''}${duzMetin(temizGoster(s.metin))}`,
-                      secenekDugmeleri(String(si), `s${si}`, s, (etiket) => toplamCevap([], [[etiket]]), [kapanisAnahtari]),
+                      secenekDugmeleri(String(si), `s${si}`, s, (etiket) => toplamCevap([], (kapanis.sorular ?? []).map((_, sj) => (sj === si ? [etiket] : []))), [kapanisAnahtari]),
                     ))
                     : null}
                   {kapanis.gorunur ? <Markdown dimColor text={temizGoster(kapanis.gorunur)} /> : null}

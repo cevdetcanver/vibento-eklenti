@@ -26,6 +26,8 @@ type Bosta = { zaman: { cancel(): void } | null; n: number; kusak: number }
 export function uyandirmaKur(istek: Istek, kopunca?: (io: Io, jeton: string) => Promise<string | null>) {
   const bostakiler = new Map<string, Bosta>()
   const uyanmalar = new Map<string, number>()
+  // Stop gelmeyen tur (kesilen, hatayla biten, durdurulan istem) pencereyi sessiz bırakmasın: son yoklamanın bilgisiyle yeniden başlar (tarama Ek 21 O3, D6).
+  const sonBasla = new Map<string, { io: Io; token: string }>()
   let kusakSayaci = 0
 
   function durdur(sid: string) {
@@ -39,6 +41,7 @@ export function uyandirmaKur(istek: Istek, kopunca?: (io: Io, jeton: string) => 
     basla(io: Io, token: string, sid: unknown) {
       if (typeof sid !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(sid)) return
       durdur(sid)
+      sonBasla.set(sid, { io, token })
       const b: Bosta = { zaman: null, n: 0, kusak: (kusakSayaci += 1) }
       bostakiler.set(sid, b)
       const kur = () => {
@@ -86,7 +89,17 @@ export function uyandirmaKur(istek: Istek, kopunca?: (io: Io, jeton: string) => 
     },
 
     durdur(sid: unknown) {
-      if (typeof sid === 'string') durdur(sid)
+      if (typeof sid === 'string') { durdur(sid); sonBasla.delete(sid) }
+    },
+
+    /** Stop gelmeden biten tur ya da durdurulan istem: pencere boşta, yoklama yeniden başlar. */
+    turBitti() {
+      for (const [sid, k] of [...sonBasla]) this.basla(k.io, k.token, sid)
+    },
+
+    /** Ana döngüde tur başladı: pencere meşgul, istem gelmese de yoklama durur (Stop yeniden başlatır). */
+    turBasladi() {
+      for (const sid of [...bostakiler.keys()]) durdur(sid)
     },
   }
 }

@@ -64,6 +64,24 @@ export const register: Register = (on, options) => {
     return { y: y2, k: taze }
   }
 
+  // Tur istemsiz de başlar (görev bildirimi, alt ajan dönüşü). Yoklama sürerse uyandırma kuyruğa girer, tur bitince boş uyanır (5 Kas ölçümü). Alt ajanın turu sayılmaz.
+  on('turn.start', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined) {
+      uyandirma.turBasladi()
+      // Tur sürerken düğme canlı kalırsa "1: Evet." tur sonundaki yeni listeye okunur; Stop aynı soruda geri getirir (tarama Ek 21 O2).
+      try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
+      try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }
+    }
+    return r
+  })
+
+  on('turn.complete', async (_$, e, next) => {
+    const r = await next(e)
+    if (e.agentId === undefined && e.reason !== 'answer') uyandirma.turBitti()
+    return r
+  })
+
   on('classic.SessionStart', async ($, e, next) => {
     const r = await next(e)
     const io: Io = {
@@ -153,9 +171,10 @@ export const register: Register = (on, options) => {
       else if (kAnahtar && typeof adim === 'object' && adim !== null) {
         await io.depoYaz(kAnahtar, { ...adim, zaman: new Date(await io.simdi()).toISOString() })
       }
-      if (mesajGecerli(kapi.mesaj)) return { ...r, block: kapi.mesaj as string, suppressOriginalPrompt: true }
+      // Durdurulan istem tur başlatmaz, Stop gelmez: yoklama geri açılır (tarama Ek 21 D6).
+      if (mesajGecerli(kapi.mesaj)) { uyandirma.turBitti(); return { ...r, block: kapi.mesaj as string, suppressOriginalPrompt: true } }
       const onayMesaji = onayKarariMesaji(karar !== null, y.govde)
-      if (onayMesaji) return { ...r, block: onayMesaji, suppressOriginalPrompt: true }
+      if (onayMesaji) { uyandirma.turBitti(); return { ...r, block: onayMesaji, suppressOriginalPrompt: true } }
       const mesaj = pencereMesajiMetni(y.govde)
       if (mesaj && y.govde) await olaylar.teslimKaydet(io, e.session_id, y.govde.pencere_mesaji_idler)
       // Uyanan turda mesaj bu istemle gelmese de tur mesajlıdır (tarama Ek 16 O1).
@@ -230,6 +249,8 @@ export const register: Register = (on, options) => {
       const mesaj = pencereMesajiMetni(y.govde)
       if (mesaj && y.govde) await olaylar.teslimKaydet(io, e.session_id, y.govde.pencere_mesaji_idler)
       if (mesaj) {
+        // Mesaj bu Stop'ta teslim edildi, tur sürer (bağlam modele gidiyor, 5 Kas bu pencerede görüldü): yoklama sonraki Stop'ta başlar.
+        uyandirma.durdur(e.session_id)
         try {
           await update($, mesajliTur, () => true)
           // Model mesajı işlerken düğme kalkar: yalın "Evet." yeni soruya okunmasın. Aynı soru yinelenince sonraki Stop geri getirir (tarama Ek 16 N1).
