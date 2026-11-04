@@ -10,6 +10,7 @@
 import { atom, memberOf, read, update } from 'claude-code'
 import type { On } from 'claude-code'
 import { KART_DEPO_ANAHTARI, ajanGoster, bantRengi, dugmeIzni, duzMetin, kartDugmeIzni, kartPlani, kaynakBul, metinBol, soruGirisi, temizGoster, toplamCevap } from './kart-mantik.mjs'
+import { uyandirmaMetniMi } from './olay-mantik.mjs'
 
 const ISTEK_ZEMINI = 'diffRemovedDimmed'
 const BANT_YAZISI = '#10241c'
@@ -21,11 +22,33 @@ const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, nul
 const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
 const mesajliTur = atom({ plugin: 'vibento', key: 'mesajliTur' } as const, false)
 const sonKartlar = atom({ plugin: 'vibento', key: 'sonKartlar' } as const, [])
+// Bir kimliğe tek cevap: model bekleyen kartı sonraki yanıtta yineleyince eski ve yeni satır ikisi de düğmeli oluyordu (4 Kas gerçek deneme, tarama Ek 14 D1).
+const cevaplananlar = atom({ plugin: 'vibento', key: 'cevaplananlar' } as const, [])
+const acikSoruDurumu = atom({ plugin: 'vibento', key: 'acikSoruDurumu' } as const, { acikSoru: '', soruMesajli: '' })
+const CEVAP_TAVANI = 100
 
 // Çift basış ve çizim arası: aynı kart ikinci kez göndermez.
 const gonderilen = new Set<string>()
+// Yeniden çizimden önce başka satırdan aynı kimliğe ikinci cevap gitmesin (tarama Ek 15 D1). Yalnız gönderim süresince; kalıcı kayıt cevaplananlar.
+const kilitliKimlik = new Set<string>()
 
 export const kartKaydet = (on: On) => {
+  // Uyandırma satırı yalnız görünümde kısalır; kayıt ve modele giden metin aynı.
+  on('ui.render', { component: 'UserMessage' }, async ($, e, next) => {
+    try {
+      // Yalnız kendi sabit metnimiz ve kısa görünüm: tam görünümde gerçek metin görünür (tarama Ek 15 O2, O3).
+      if (e.props.isExpanded) return next(e)
+      const kaynak = e.props.origin
+      if (kaynak?.kind !== 'plugin' || kaynak.name !== 'vibento' || !uyandirmaMetniMi(e.props.text)) return next(e)
+      const durum = await $.store.get(KART_DEPO_ANAHTARI) as { acik?: unknown } | undefined
+      if (durum?.acik !== true) return next(e)
+      const { Text } = $.ui.resolve(e)
+      return <Text dimColor>Başka pencereden mesaj geldi.</Text>
+    } catch {
+      return next(e)
+    }
+  })
+
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     try {
       // Özet satırının motor işareti kendi ağacımızda taşınmaz; özete dokunulmaz.
@@ -71,16 +94,19 @@ export const kartKaydet = (on: On) => {
       const secimUye = memberOf(secimler, e)
       const kartParcalari = plan.parcalar.flatMap((p, i) => (p.tur === 'kart' ? [{ p, i }] : []))
       const sonK = kartParcalari.length > 0 ? await read($, sonKartlar) : []
-      const dugmeliKartlar = kartParcalari.filter(({ p }) => kartDugmeIzni(p, kaynakBul(durum.kaynaklar, p.pencere, p.kimlik, p.ajan), sonK))
-      const secimVar = kapanis !== null || dugmeliKartlar.length > 0
+      const cevaplanan = await read($, cevaplananlar)
+      const dugmeliKartlar = kartParcalari.filter(({ p }) => !cevaplanan.includes(p.kimlik ?? '') && kartDugmeIzni(p, kaynakBul(durum.kaynaklar, p.pencere, p.kimlik, p.ajan), sonK))
+      const secimVar = kapanis !== null || kartParcalari.length > 0
       const acik = kapanis ? (await read($, uye)) === true : false
       const verilen = secimVar ? await read($, cevapUye) : ''
       const secili = secimVar ? await read($, secimUye) : {}
       const ben = kapanis ? await read($, kartPencere) : null
       const kaynak = kapanis?.kaynak ?? null
       const kaynakBilgi = kaynak ? kaynakBul(durum.kaynaklar, kaynak.pencere, kaynak.kimlik, kaynak.ajan) : null
-      const dugme = kapanis?.sorular
-        ? dugmeIzni(kapanis, kaynakBilgi, await read($, sonSoru), await read($, mesajliTur))
+      // Kapanışın cevap anahtarı: başka pencerenin sorusunda kimliği, kendi sorusunda metni. Model yineleyince aynı soruya ikinci cevap gitmesin.
+      const kapanisAnahtari = kaynak?.kimlik ?? kapanis?.soru ?? ''
+      const dugme = kapanis?.sorular && !cevaplanan.includes(kapanisAnahtari)
+        ? dugmeIzni(kapanis, kaynakBilgi, await read($, sonSoru), await read($, mesajliTur), (await read($, acikSoruDurumu)).acikSoru)
         : false
       const dogrulanmamis = kaynak !== null && kaynakBilgi?.dogrulandi !== true
       const kapanisSorulari = dugme && kapanis?.sorular ? kapanis.sorular : []
@@ -94,23 +120,35 @@ export const kartKaydet = (on: On) => {
       const kapanisBos = seciliSoru.every((s) => s.length === 0)
       const toplamSoru = dugmeliKartlar.length + kapanisSorulari.length
       // Tek soru tek seçimse basınca gider; gerisi işaretlenir, tek Gönder. Kartlardan yalnız bazısına cevap verilebilir, kapanış sorusu yarım gitmez.
-      const hemenGider = toplamSoru === 1 && !(dugmeliKartlar[0]?.p.sorular?.[0]?.coklu ?? kapanisSorulari[0]?.coklu ?? false)
+      const hemenGider = toplamSoru === 1 && seciliKart.length === 0 && kapanisBos && !(dugmeliKartlar[0]?.p.sorular?.[0]?.coklu ?? kapanisSorulari[0]?.coklu ?? false)
       const gonderHazir = !hemenGider && (kapanisTam || (seciliKart.length > 0 && kapanisBos))
 
-      const gonder = async (metin: string) => {
-        if (gonderilen.has(e.requestId)) return
+      const gonder = async (metin: string, kimlikler: string[]) => {
+        if (gonderilen.has(e.requestId) || kimlikler.some((k) => kilitliKimlik.has(k))) return
         gonderilen.add(e.requestId)
+        for (const k of kimlikler) kilitliKimlik.add(k)
         try {
+          const onceki = await read($, cevaplananlar)
+          if (kimlikler.some((k) => onceki.includes(k))) {
+            gonderilen.delete(e.requestId)
+            return
+          }
           await update($, cevapUye, () => metin)
-          await $.prompt.submit({ text: metin, asUser: true })
+          await update($, cevaplananlar, (eski) => [...eski, ...kimlikler].slice(-CEVAP_TAVANI))
+          const sonuc = await $.prompt.submit({ text: metin, asUser: true })
+          // Motor istemi düşürürse cevap modele gitmemiştir (tarama Ek 15 O1).
+          if (sonuc.drop !== undefined) throw new Error('dustu')
         } catch {
           gonderilen.delete(e.requestId)
+          await update($, cevaplananlar, (eski) => eski.filter((k) => !kimlikler.includes(k)))
           await update($, cevapUye, () => '')
           await $.ui.toast('Cevap gönderilemedi, yazarak ver.')
+        } finally {
+          for (const k of kimlikler) kilitliKimlik.delete(k)
         }
       }
 
-      const secenekDugmeleri = (anahtar: string, onEk: string, s: { secenekler: string[], coklu: boolean }, hemen: (etiket: string) => string) => s.secenekler.map((etiket, oi) => {
+      const secenekDugmeleri = (anahtar: string, onEk: string, s: { secenekler: string[], coklu: boolean }, hemen: (etiket: string) => string, kimlikler: string[]) => s.secenekler.map((etiket, oi) => {
         const sec = secili[anahtar] ?? []
         const isaretli = sec.includes(etiket)
         return (
@@ -119,7 +157,7 @@ export const kartKaydet = (on: On) => {
             variant={isaretli || oi === 0 ? 'primary' : 'secondary'}
             label={isaretli ? `✓ ${etiket}` : etiket}
             onPress={() => {
-              if (hemenGider) return gonder(hemen(etiket))
+              if (hemenGider) return gonder(hemen(etiket), kimlikler)
               return update($, secimUye, (eski) => {
                 const mevcut = eski[anahtar] ?? []
                 const yeni = s.coklu
@@ -132,7 +170,7 @@ export const kartKaydet = (on: On) => {
         )
       })
       const gonderDugmesi = gonderHazir && !verilen
-        ? <Button key="gonder" variant="primary" label="Gönder" onPress={() => gonder(toplamCevap(seciliKart, kapanisTam ? seciliSoru : null, kaynak?.kimlik ?? null))} />
+        ? <Button key="gonder" variant="primary" label="Gönder" onPress={() => gonder(toplamCevap(seciliKart, kapanisTam ? seciliSoru : null, kaynak?.kimlik ?? null), [...seciliKart.map((k) => k.kimlik), ...(kapanisTam ? [kapanisAnahtari] : [])])} />
         : null
 
       const bant = (ad: string, ajan: string | null, ek: string, ham: string | null, dogru: boolean) => {
@@ -172,10 +210,13 @@ export const kartKaydet = (on: On) => {
                     ? (
                       <Box flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
                         {kartSoru.metin ? <Text>{duzMetin(temizGoster(kartSoru.metin))}</Text> : null}
-                        {secenekDugmeleri(kartAnahtar(i), `k${i}`, kartSoru, (etiket) => toplamCevap([{ kimlik: p.kimlik ?? '', secim: [etiket] }], null))}
+                        {secenekDugmeleri(kartAnahtar(i), `k${i}`, kartSoru, (etiket) => toplamCevap([{ kimlik: p.kimlik ?? '', secim: [etiket] }], null), p.kimlik ? [p.kimlik] : [])}
                       </Box>
                     )
                     : <Markdown text={temizGoster(p.metin)} />}
+                  {!verilen && p.etiket === 'SORU' && p.kimlik && cevaplanan.includes(p.kimlik)
+                    ? <Text dimColor>Bu soruya cevap verildi; yeni soruysa yazarak cevapla.</Text>
+                    : null}
                 </Box>
               </Box>
             )
@@ -199,13 +240,16 @@ export const kartKaydet = (on: On) => {
                   {dugme && !verilen && kapanis.sorular
                     ? (soruGirisi(kapanis.soru, kapanis.sorular) ? <Text>{duzMetin(temizGoster(soruGirisi(kapanis.soru, kapanis.sorular)))}</Text> : null)
                     : <Markdown text={temizGoster(kapanis.soru)} />}
+                  {!verilen && kaynak?.etiket !== 'ONAY İSTİYOR' && cevaplanan.includes(kapanisAnahtari)
+                    ? <Text dimColor>Bu soruya cevap verildi; yeni soruysa yazarak cevapla.</Text>
+                    : null}
                   {dugme && !verilen && kapanis.sorular
                     ? kapanis.sorular.map((s, si) => (
                       <Box key={`s${si}`} flexDirection="row" flexWrap="wrap" gap={1} alignItems="center">
                         {s.metin || (kapanis.sorular?.length ?? 0) > 1
                           ? <Text>{(kapanis.sorular?.length ?? 0) > 1 ? `${si + 1}. ` : ''}{duzMetin(temizGoster(s.metin))}</Text>
                           : null}
-                        {secenekDugmeleri(String(si), `s${si}`, s, (etiket) => toplamCevap([], [[etiket]]))}
+                        {secenekDugmeleri(String(si), `s${si}`, s, (etiket) => toplamCevap([], [[etiket]]), [kapanisAnahtari])}
                       </Box>
                     ))
                     : null}
@@ -220,7 +264,7 @@ export const kartKaydet = (on: On) => {
                 </Box>
               </Box>
             )
-            : (dugmeliKartlar.length > 0
+            : (dugmeliKartlar.length > 0 || verilen
               ? (
                 <Box flexDirection="row" gap={1}>
                   {gonderDugmesi}

@@ -10,9 +10,9 @@ import type { Register } from 'claude-code'
 import type { Io } from './io.ts'
 import { sunucuAdresi } from './esleme-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
-import { KART_DEPO_ANAHTARI, kartDurumu, kartPencereOku, kartPlani, sonKartlarOku } from './kart-mantik.mjs'
+import { KART_DEPO_ANAHTARI, acikSoruGuncelle, kartDurumu, kartPencereOku, kartPlani, sonKartlarOku } from './kart-mantik.mjs'
 import { kartKaydet } from './kart.tsx'
-import { atom, update } from 'claude-code'
+import { atom, read, update } from 'claude-code'
 import { kapiAnahtari, kapiHazirla, kapiKarari, onayKarariAyikla, onayKarariMesaji, mesajGecerli } from './kapi-mantik.mjs'
 import { aracKimligiGirdisi, izinVerilirMi, vibentoAracAdi } from './kimlik-mantik.mjs'
 import { eslemeKur, type Baglanti } from './esleme.ts'
@@ -25,6 +25,8 @@ const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, nul
 const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
 const mesajliTur = atom({ plugin: 'vibento', key: 'mesajliTur' } as const, false)
 const sonKartlar = atom({ plugin: 'vibento', key: 'sonKartlar' } as const, [])
+const acikSoruDurumu = atom({ plugin: 'vibento', key: 'acikSoruDurumu' } as const, { acikSoru: '', soruMesajli: '' })
+const cevaplananlar = atom({ plugin: 'vibento', key: 'cevaplananlar' } as const, [])
 
 // Kart anahtarı ve renkler (docs/sozlesme-pencere-kartlari.md): yalnız değişince yazılır; hata turu bozmaz.
 const kartDurumuYaz = async (io: Io, govde: unknown, baglantiId: string | undefined) => {
@@ -125,6 +127,10 @@ export const register: Register = (on, options) => {
     // Yeni istem: eski kartın düğmesi kalkar (görünüm; hata turu bozmaz).
     try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
     try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }
+    // Kişinin yeni istemi açık soruyu kapatır; uyanan tur kapatmaz.
+    if (istemSinifi(e.prompt) === 'insan') {
+      try { await update($, acikSoruDurumu, (eski) => ({ ...eski, acikSoru: '' })) } catch { /* görünüm */ }
+    }
     try {
       // Pencere artık boşta değil: uyandırma yoklaması durur; insan istemi uyanma frenini sıfırlar.
       uyandirma.istem(e.session_id, istemSinifi(e.prompt) === 'insan')
@@ -152,7 +158,8 @@ export const register: Register = (on, options) => {
       if (onayMesaji) return { ...r, block: onayMesaji, suppressOriginalPrompt: true }
       const mesaj = pencereMesajiMetni(y.govde)
       if (mesaj && y.govde) await olaylar.teslimKaydet(io, e.session_id, y.govde.pencere_mesaji_idler)
-      try { await update($, mesajliTur, () => Boolean(mesaj)) } catch { /* görünüm */ }
+      // Uyanan turda mesaj bu istemle gelmese de tur mesajlıdır (tarama Ek 16 O1).
+      try { await update($, mesajliTur, () => Boolean(mesaj) || istemSinifi(e.prompt) === 'uyandirma') } catch { /* görünüm */ }
       return bagla(bagla(r, not), mesaj)
     } catch {
       return r
@@ -208,14 +215,26 @@ export const register: Register = (on, options) => {
       // Düğme yalnız son yanıtın sorusunda (kart-mantik dugmeIzni).
       try {
         const plan = kartPlani(e.last_assistant_message)
-        await update($, sonSoru, () => plan?.kapanis?.soru ?? '')
+        const soru = plan?.kapanis?.soru ?? ''
+        await update($, sonSoru, () => soru)
         await update($, sonKartlar, () => sonKartlarOku(plan))
+        const mesajli = (await read($, mesajliTur)) === true
+        const kendiSorusu = plan?.kapanis?.kaynak ? '' : soru
+        await update($, acikSoruDurumu, (eski) => acikSoruGuncelle(eski, kendiSorusu, mesajli))
+        // Metin anahtarı yalnız art arda yinelemeyi kapatır: soru değişince aynı metin yeniden düğme alır (tarama Ek 16 O2).
+        await update($, cevaplananlar, (eski) => eski.filter((k) => /^[0-9a-f]{6}$/.test(k) || k === soru))
       } catch { /* görünüm */ }
       // Değişmez 11: Stop'ta block yok; Claude zaten bir Stop kancası yüzünden devam ediyorsa mesaj basılmaz.
       if (e.stop_hook_active === true) return r
       const mesaj = pencereMesajiMetni(y.govde)
       if (mesaj && y.govde) await olaylar.teslimKaydet(io, e.session_id, y.govde.pencere_mesaji_idler)
-      if (mesaj) { try { await update($, mesajliTur, () => true) } catch { /* görünüm */ } }
+      if (mesaj) {
+        try {
+          await update($, mesajliTur, () => true)
+          // Model mesajı işlerken düğme kalkar: yalın "Evet." yeni soruya okunmasın. Aynı soru yinelenince sonraki Stop geri getirir (tarama Ek 16 N1).
+          await update($, sonSoru, () => '')
+        } catch { /* görünüm */ }
+      }
       return bagla(r, mesaj)
     } catch {
       return r

@@ -5,6 +5,8 @@ export type KartPencere = { ad: string; ajan: string | null; renk: string | null
 export type SonSoru = string
 export type MesajliTur = boolean
 export type SonKartlar = string[]
+export type Cevaplananlar = string[]
+export type AcikSoruDurumu = { acikSoru: string; soruMesajli: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -16,6 +18,8 @@ declare module 'claude-code' {
       sonSoru: SonSoru
       mesajliTur: MesajliTur
       sonKartlar: SonKartlar
+      cevaplananlar: Cevaplananlar
+      acikSoruDurumu: AcikSoruDurumu
     }
   }
 }

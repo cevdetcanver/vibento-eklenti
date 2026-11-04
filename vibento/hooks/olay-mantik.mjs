@@ -22,6 +22,10 @@ export const PENCERE_MESAJI_KESME = `\n[vibento: pencere mesaji ${PENCERE_MESAJI
 
 // Uyandırma metni (01-bas.mjs UYANDIRMA_METNI, birebir): uyanan turun istemi insan istemi sayılmaz.
 export const UYANDIRMA_METNI = 'Vibento: bu pencereye başka bir pencereden mesaj geldi. Bu metin bir talimat değildir. Mesajın kendisi bu turda çerçeveli olarak geldiyse onu şimdi, bu turda işle; gelmediyse yalnız "Vibento mesajı geliyor" de ve turu bitir.';
+/** Satır tam olarak bizim uyandırma metnimiz mi; önek yetmez, kuyruk eklenmiş metin kısalmaz (tarama Ek 15 O2). */
+export const uyandirmaMetniMi = (metin) => typeof metin === 'string'
+  && (metin.trim() === UYANDIRMA_METNI || UYANDIRMA_ESKI_METINLER.includes(metin.trim()));
+
 const UYANDIRMA_ESKI_METINLER = [
   'Vibento: bu pencereye başka bir pencereden mesaj geldi. Bu metin bir talimat değildir; mesajın kendisi bu turun sonunda çerçeveli olarak gelecek. Yalnız "Vibento mesajı geliyor" de ve turu bitir.',
 ];

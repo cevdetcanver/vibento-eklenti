@@ -173,12 +173,29 @@ export function cevapMetni(secimler) {
  * @param {{ dogrulandi: boolean } | null} kaynakBilgi
  * @param {string} sonSoru
  * @param {boolean} mesajliTur
+ * @param {string} [acikSoru] mesaj geldiği anda açık olan, kişinin turunda sorulmuş soru: model aynen yineleyince düğme kalır (4 Kas gerçek deneme, tarama Ek 16 Y1)
  * @returns {boolean}
  */
-export function dugmeIzni(kapanis, kaynakBilgi, sonSoru, mesajliTur) {
+export function dugmeIzni(kapanis, kaynakBilgi, sonSoru, mesajliTur, acikSoru = '') {
   if (!sonSoru || sonSoru !== kapanis.soru) return false;
   if (kapanis.kaynak) return kaynakBilgi?.dogrulandi === true && kapanis.kaynak.etiket !== 'ONAY İSTİYOR';
-  return !mesajliTur;
+  return !mesajliTur || (acikSoru !== '' && acikSoru === kapanis.soru);
+}
+
+/**
+ * Stop'ta açık soru. Liste değil tek soru: eski bir metni yazdırarak düğme alınmasın (tarama Ek 16 Y1). Kişinin yeni istemi de siler (register).
+ * Mesajlı turda başka soru açığı kapatır; mesajlı turun sorusu kişinin turunda yinelense de açık olmaz (Ek 16 O1).
+ * @param {{ acikSoru?: string, soruMesajli?: string }} durum
+ * @param {string} soru bu yanıtın etiketsiz kapanış sorusu, yoksa boş
+ * @param {boolean} mesajli
+ * @returns {{ acikSoru: string, soruMesajli: string }}
+ */
+export function acikSoruGuncelle(durum, soru, mesajli) {
+  const acikSoru = durum?.acikSoru ?? '';
+  const soruMesajli = durum?.soruMesajli ?? '';
+  // Sorusuz biten mesajlı tur açık soruyu kapatmaz: kişi hâlâ o soruyu bekliyor, yeni bir şey sorulmadı (Ek 16 N4).
+  if (mesajli) return !soru || soru === acikSoru ? { acikSoru, soruMesajli } : { acikSoru: '', soruMesajli: soru };
+  return { acikSoru: soru && soru !== soruMesajli ? soru : '', soruMesajli };
 }
 
 /** Son yanıttaki kartı tanır: eski yanıtın düğmesi kalkar (Stop yazar, yeni istem siler). */
