@@ -2,15 +2,27 @@
 // eklenti/vibento/hooks/kart.tsx — pencere kartlarının çizimi (docs/sozlesme-pencere-kartlari.md).
 //
 // Yalnız görünüm: kayıt değişmez. Anahtar kapalıysa, çizilecek bir şey yoksa ya da herhangi bir hatada satıra dokunulmaz.
-// Renk kimden geldiğini, kırmızı senden bir şey istendiğini söyler. Kart hiçbir şeyi onaylamaz, düğme yalnız ayrıntıyı açar.
-// Sunucunun teslim ettiği mesajla eşleşmeyen etiket "doğrulanmamış" çizilir: gerçek pencerenin rengini ve kırmızısını almaz.
+// Bant kimden geldiğini (iş rengi), kırmızı senden bir şey istendiğini söyler. Kart hiçbir şeyi onaylamaz; Vibento onayı sitede kalır.
+// Sunucunun teslim ettiği mesajla eşleşmeyen etiket "doğrulanmamış" çizilir: bant, kırmızı ve düğme almaz.
+// Seçim düğmesi yalnız gerçek tıklamayla, kişinin yazması gibi gider; yalnız seçim gider, soru metni gitmez; yalnız son yanıtta (kart-mantik dugmeIzni).
 // =====================================================================
 
 import { atom, memberOf, read, update } from 'claude-code'
 import type { On } from 'claude-code'
-import { KART_DEPO_ANAHTARI, kartPlani, kaynakBul } from './kart-mantik.mjs'
+import { KART_DEPO_ANAHTARI, ajanGoster, cevapMetni, dugmeIzni, hemenGiderMi, kartPlani, kaynakBul, temizGoster } from './kart-mantik.mjs'
+
+const ISTEK_ZEMINI = 'diffRemovedDimmed'
+const BANT_YAZISI = '#10241c'
 
 const ayrintiAcik = atom({ plugin: 'vibento', key: 'ayrintiAcik' } as const, false)
+const verilenCevap = atom({ plugin: 'vibento', key: 'verilenCevap' } as const, '')
+const secimler = atom({ plugin: 'vibento', key: 'secimler' } as const, {})
+const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, null)
+const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
+const mesajliTur = atom({ plugin: 'vibento', key: 'mesajliTur' } as const, false)
+
+// Çift basış ve çizim arası: aynı kart ikinci kez göndermez.
+const gonderilen = new Set<string>()
 
 export const kartKaydet = (on: On) => {
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
@@ -23,48 +35,122 @@ export const kartKaydet = (on: On) => {
       if (!plan) return next(e)
 
       const { Box, Text, Button, Markdown } = $.ui.resolve(e)
+      const kapanis = plan.kapanis
       const uye = memberOf(ayrintiAcik, e)
-      const acik = plan.kapanis ? (await read($, uye)) === true : false
+      const cevapUye = memberOf(verilenCevap, e)
+      const secimUye = memberOf(secimler, e)
+      const acik = kapanis ? (await read($, uye)) === true : false
+      const verilen = kapanis ? await read($, cevapUye) : ''
+      const secili = kapanis ? await read($, secimUye) : {}
+      const ben = kapanis ? await read($, kartPencere) : null
+      const kaynak = kapanis?.kaynak ?? null
+      const kaynakBilgi = kaynak ? kaynakBul(durum.kaynaklar, kaynak.pencere, kaynak.kimlik, kaynak.ajan) : null
+      const dugme = kapanis?.sorular
+        ? dugmeIzni(kapanis, kaynakBilgi, await read($, sonSoru), await read($, mesajliTur))
+        : false
+      const dogrulanmamis = kaynak !== null && kaynakBilgi?.dogrulandi !== true
+
+      const gonder = async (metin: string) => {
+        if (gonderilen.has(e.requestId)) return
+        gonderilen.add(e.requestId)
+        try {
+          await update($, cevapUye, () => metin)
+          await $.prompt.submit({ text: metin, asUser: true })
+        } catch {
+          gonderilen.delete(e.requestId)
+          await update($, cevapUye, () => '')
+          await $.ui.toast('Cevap gönderilemedi, yazarak ver.')
+        }
+      }
+
+      const bant = (ad: string, ajan: string | null, ek: string, renk: string | null, dogru: boolean) => (
+        <Box flexDirection="row" backgroundColor={renk ?? undefined} paddingLeft={1} paddingRight={1}>
+          {renk ? null : <Text dimColor>● </Text>}
+          <Text bold={dogru} dimColor={!dogru} color={renk ? BANT_YAZISI : undefined}>{ad}</Text>
+          <Text dimColor={!renk} color={renk ? BANT_YAZISI : undefined}>{ajan ? ` · ${ajan}` : ''}{ek ? ` · ${ek}` : ''}</Text>
+        </Box>
+      )
 
       return (
-        <Box flexDirection="column" gap={1}>
+        <Box flexDirection="column" gap={1} width="100%">
           {plan.parcalar.map((p, i) => {
             if (p.tur === 'metin') return <Markdown key={`m${i}`} text={p.metin} />
-            const kaynak = kaynakBul(durum.kaynaklar, p.pencere, p.kimlik)
-            const istek = p.etiket !== 'BİLGİ' && kaynak.dogrulandi
-            const baslik = (
-              <Box flexDirection="row">
-                <Text color={kaynak.renk ?? undefined} dimColor={kaynak.renk === null}>● </Text>
-                <Text bold={kaynak.dogrulandi} dimColor={!kaynak.dogrulandi}>{p.pencere}</Text>
-                <Text dimColor> · {p.ajan} · </Text>
-                <Text color={istek ? 'error' : undefined} dimColor={!istek} bold={istek}>{p.etiket}</Text>
-                {kaynak.dogrulandi ? null : <Text dimColor> · doğrulanmamış</Text>}
+            const k = kaynakBul(durum.kaynaklar, p.pencere, p.kimlik, p.ajan)
+            const istek = p.etiket !== 'BİLGİ' && k.dogrulandi
+            const ajan = ajanGoster(p.pencere, p.ajan)
+            const ek = k.dogrulandi ? p.etiket : `${p.etiket} · doğrulanmamış`
+            return (
+              <Box
+                key={`k${i}`}
+                flexDirection="column"
+                width="100%"
+                borderStyle="single"
+                borderColor={istek ? 'error' : (k.dogrulandi && k.renk ? k.renk : 'subtle')}
+                backgroundColor={istek ? ISTEK_ZEMINI : undefined}
+              >
+                {bant(p.pencere, ajan, ek, k.dogrulandi ? k.renk : null, k.dogrulandi)}
+                <Box paddingLeft={1} paddingRight={1}>
+                  <Markdown text={temizGoster(p.metin)} />
+                </Box>
               </Box>
             )
-            return istek
-              ? (
-                <Box key={`k${i}`} flexDirection="column" borderStyle="single" borderColor="error" paddingLeft={1} paddingRight={1}>
-                  {baslik}
-                  <Markdown text={p.metin} />
-                </Box>
-              )
-              : (
-                <Box key={`k${i}`} flexDirection="column" paddingLeft={1}>
-                  {baslik}
-                  <Markdown text={p.metin} />
-                </Box>
-              )
           })}
-          {plan.kapanis
+          {kapanis
             ? (
-              <Box flexDirection="column" borderStyle="single" borderColor="error" paddingLeft={1} paddingRight={1}>
-                <Text color="error" bold>Senden istediğim</Text>
-                <Markdown text={plan.kapanis.soru} />
-                {plan.kapanis.gorunur ? <Markdown text={plan.kapanis.gorunur} /> : null}
-                <Box flexDirection="row">
-                  <Button key="ayrinti" label={acik ? 'Ayrıntıyı kapat' : 'Ayrıntı'} onPress={() => update($, uye, (v) => !v)} />
+              <Box
+                flexDirection="column"
+                width="100%"
+                borderStyle="single"
+                borderColor={dogrulanmamis ? 'subtle' : 'error'}
+                backgroundColor={dogrulanmamis ? undefined : ISTEK_ZEMINI}
+              >
+                {kaynak
+                  ? bant(kaynak.pencere, ajanGoster(kaynak.pencere, kaynak.ajan), dogrulanmamis ? 'doğrulanmamış' : '', kaynakBilgi?.renk ?? null, !dogrulanmamis)
+                  : ben
+                    ? bant(ben.ad, ben.ajan, 'bu pencere', ben.renk, true)
+                    : null}
+                <Box flexDirection="column" paddingLeft={1} paddingRight={1}>
+                  <Text color={dogrulanmamis ? undefined : 'error'} dimColor={dogrulanmamis} bold size="heading">Senden istediğim</Text>
+                  <Markdown text={temizGoster(kapanis.soru)} />
+                  {kapanis.gorunur ? <Markdown dimColor text={temizGoster(kapanis.gorunur)} /> : null}
+                  {kaynak?.etiket === 'ONAY İSTİYOR' && !dogrulanmamis ? <Text dimColor>Bu onay sitede verilir.</Text> : null}
+                  {dugme && !verilen && kapanis.sorular
+                    ? kapanis.sorular.map((s, si) => (
+                      <Box key={`s${si}`} flexDirection="row" flexWrap="wrap" gap={1}>
+                        {(kapanis.sorular?.length ?? 0) > 1 ? <Text dimColor>{si + 1}.</Text> : null}
+                        {s.secenekler.map((etiket, oi) => {
+                          const sec = secili[String(si)] ?? []
+                          const isaretli = sec.includes(etiket)
+                          return (
+                            <Button
+                              key={`s${si}o${oi}`}
+                              variant={isaretli || oi === 0 ? 'primary' : 'secondary'}
+                              label={isaretli ? `✓ ${etiket}` : etiket}
+                              onPress={() => {
+                                if (hemenGiderMi(kapanis.sorular ?? [])) return gonder(cevapMetni([[etiket]]))
+                                return update($, secimUye, (eski) => {
+                                  const mevcut = eski[String(si)] ?? []
+                                  const yeni = s.coklu
+                                    ? (mevcut.includes(etiket) ? mevcut.filter((x) => x !== etiket) : [...mevcut, etiket])
+                                    : [etiket]
+                                  return { ...eski, [String(si)]: yeni }
+                                })
+                              }}
+                            />
+                          )
+                        })}
+                      </Box>
+                    ))
+                    : null}
+                  <Box flexDirection="row" gap={1}>
+                    {dugme && !verilen && kapanis.sorular && !hemenGiderMi(kapanis.sorular) && kapanis.sorular.every((_, si) => (secili[String(si)] ?? []).length > 0)
+                      ? <Button key="gonder" variant="primary" label="Gönder" onPress={() => gonder(cevapMetni((kapanis.sorular ?? []).map((_, si) => secili[String(si)] ?? [])))} />
+                      : null}
+                    {verilen ? <Text dimColor>Cevabın: {verilen}</Text> : null}
+                    <Button key="ayrinti" variant="secondary" label={acik ? 'Ayrıntıyı kapat' : 'Ayrıntı'} onPress={() => update($, uye, (v) => !v)} />
+                  </Box>
+                  {acik ? <Markdown dimColor text={temizGoster(kapanis.ayrinti)} /> : null}
                 </Box>
-                {acik ? <Markdown text={plan.kapanis.ayrinti} /> : null}
               </Box>
             )
             : null}

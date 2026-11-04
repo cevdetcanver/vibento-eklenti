@@ -10,8 +10,9 @@ import type { Register } from 'claude-code'
 import type { Io } from './io.ts'
 import { sunucuAdresi } from './esleme-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
-import { KART_DEPO_ANAHTARI, kartDurumu } from './kart-mantik.mjs'
+import { KART_DEPO_ANAHTARI, kartDurumu, kartPencereOku, kartPlani } from './kart-mantik.mjs'
 import { kartKaydet } from './kart.tsx'
+import { atom, update } from 'claude-code'
 import { kapiAnahtari, kapiHazirla, kapiKarari, onayKarariAyikla, onayKarariMesaji, mesajGecerli } from './kapi-mantik.mjs'
 import { aracKimligiGirdisi, izinVerilirMi, vibentoAracAdi } from './kimlik-mantik.mjs'
 import { eslemeKur, type Baglanti } from './esleme.ts'
@@ -19,6 +20,10 @@ import { olayKur } from './olay.ts'
 import { senkKur, istekYap, type Istek } from './senk.ts'
 import { altAjanEsitle } from './altajan.ts'
 import { uyandirmaKur } from './uyandirma.ts'
+
+const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, null)
+const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
+const mesajliTur = atom({ plugin: 'vibento', key: 'mesajliTur' } as const, false)
 
 // Kart anahtarı ve renkler (docs/sozlesme-pencere-kartlari.md): yalnız değişince yazılır; hata turu bozmaz.
 const kartDurumuYaz = async (io: Io, govde: unknown, baglantiId: string | undefined) => {
@@ -81,6 +86,11 @@ export const register: Register = (on, options) => {
       // Anahtar reddedildi: pencere sessizce kopmasın, kod bu açılışta gelsin (eskiden ikinci bir konuşma gerekiyordu; 2 Kas ölçüldü).
       if (y === 'reddedildi') return bagla(r, await esleme.istem(io))
       const { baglam, oturumAdi } = acilisCiktisi(e as unknown as Record<string, unknown>, y.govde)
+      // Kapanış kartının başlığı: bu oturumun kimliği. Sunucu yalnız çoklu çalışmada gönderir; görünümdür, hata açılışı bozmaz.
+      try {
+        const ben = kartPencereOku(y.govde)
+        await update($, kartPencere, () => ben)
+      } catch { /* görünüm */ }
       // Açılış da pencereyi boşa düşürür: yeni açılan pencere de uyandırılabilir olmalı (kanca: `--dinle` Stop VE SessionStart'ta).
       const yeniNesil = e.source === 'startup' || e.source === 'resume' || e.source === 'clear'
       if (yeniNesil) uyandirma.basla(io, k.token, e.session_id)
@@ -111,6 +121,8 @@ export const register: Register = (on, options) => {
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
     }
+    // Yeni istem: eski kartın düğmesi kalkar (görünüm; hata turu bozmaz).
+    try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
     try {
       // Pencere artık boşta değil: uyandırma yoklaması durur; insan istemi uyanma frenini sıfırlar.
       uyandirma.istem(e.session_id, istemSinifi(e.prompt) === 'insan')
@@ -138,6 +150,7 @@ export const register: Register = (on, options) => {
       if (onayMesaji) return { ...r, block: onayMesaji, suppressOriginalPrompt: true }
       const mesaj = pencereMesajiMetni(y.govde)
       if (mesaj && y.govde) await olaylar.teslimKaydet(io, e.session_id, y.govde.pencere_mesaji_idler)
+      try { await update($, mesajliTur, () => Boolean(mesaj)) } catch { /* görünüm */ }
       return bagla(bagla(r, not), mesaj)
     } catch {
       return r
@@ -190,10 +203,16 @@ export const register: Register = (on, options) => {
       uyandirma.basla(io, k.token, e.session_id)
       void senk.senkYap(io, k.token, e.transcript_path, e.session_id, e.cwd, 20_000)
         .then(() => altAjanEsitle(io, istek, k.token, e.transcript_path, e.session_id, 15_000))
+      // Düğme yalnız son yanıtın sorusunda (kart-mantik dugmeIzni).
+      try {
+        const plan = kartPlani(e.last_assistant_message)
+        await update($, sonSoru, () => plan?.kapanis?.soru ?? '')
+      } catch { /* görünüm */ }
       // Değişmez 11: Stop'ta block yok; Claude zaten bir Stop kancası yüzünden devam ediyorsa mesaj basılmaz.
       if (e.stop_hook_active === true) return r
       const mesaj = pencereMesajiMetni(y.govde)
       if (mesaj && y.govde) await olaylar.teslimKaydet(io, e.session_id, y.govde.pencere_mesaji_idler)
+      if (mesaj) { try { await update($, mesajliTur, () => true) } catch { /* görünüm */ } }
       return bagla(r, mesaj)
     } catch {
       return r
