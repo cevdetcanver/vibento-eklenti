@@ -4,6 +4,7 @@ export type Secimler = Record<string, string[]>
 export type KartPencere = { ad: string; ajan: string | null; renk: string | null } | null
 export type SonSoru = string
 export type MesajliTur = boolean
+export type SonKartlar = string[]
 
 declare module 'claude-code' {
   interface PluginState {
@@ -14,6 +15,7 @@ declare module 'claude-code' {
       kartPencere: KartPencere
       sonSoru: SonSoru
       mesajliTur: MesajliTur
+      sonKartlar: SonKartlar
     }
   }
 }

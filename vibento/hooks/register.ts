@@ -10,7 +10,7 @@ import type { Register } from 'claude-code'
 import type { Io } from './io.ts'
 import { sunucuAdresi } from './esleme-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
-import { KART_DEPO_ANAHTARI, kartDurumu, kartPencereOku, kartPlani } from './kart-mantik.mjs'
+import { KART_DEPO_ANAHTARI, kartDurumu, kartPencereOku, kartPlani, sonKartlarOku } from './kart-mantik.mjs'
 import { kartKaydet } from './kart.tsx'
 import { atom, update } from 'claude-code'
 import { kapiAnahtari, kapiHazirla, kapiKarari, onayKarariAyikla, onayKarariMesaji, mesajGecerli } from './kapi-mantik.mjs'
@@ -24,6 +24,7 @@ import { uyandirmaKur } from './uyandirma.ts'
 const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, null)
 const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
 const mesajliTur = atom({ plugin: 'vibento', key: 'mesajliTur' } as const, false)
+const sonKartlar = atom({ plugin: 'vibento', key: 'sonKartlar' } as const, [])
 
 // Kart anahtarı ve renkler (docs/sozlesme-pencere-kartlari.md): yalnız değişince yazılır; hata turu bozmaz.
 const kartDurumuYaz = async (io: Io, govde: unknown, baglantiId: string | undefined) => {
@@ -123,6 +124,7 @@ export const register: Register = (on, options) => {
     }
     // Yeni istem: eski kartın düğmesi kalkar (görünüm; hata turu bozmaz).
     try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
+    try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }
     try {
       // Pencere artık boşta değil: uyandırma yoklaması durur; insan istemi uyanma frenini sıfırlar.
       uyandirma.istem(e.session_id, istemSinifi(e.prompt) === 'insan')
@@ -207,6 +209,7 @@ export const register: Register = (on, options) => {
       try {
         const plan = kartPlani(e.last_assistant_message)
         await update($, sonSoru, () => plan?.kapanis?.soru ?? '')
+        await update($, sonKartlar, () => sonKartlarOku(plan))
       } catch { /* görünüm */ }
       // Değişmez 11: Stop'ta block yok; Claude zaten bir Stop kancası yüzünden devam ediyorsa mesaj basılmaz.
       if (e.stop_hook_active === true) return r
