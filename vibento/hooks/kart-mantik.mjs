@@ -211,7 +211,7 @@ export function sonKartlarOku(plan) {
 
 /**
  * Pencere kartında düğme: yalnız SORU, sunucunun teslim ettiği kaynakla eşleşen, son yanıttaki, tek sorulu kart.
- * ONAY İSTİYOR düğme almaz: onay isteyen pencere yalnız kendi talebinin kararını kabul eder, onay sitede.
+ * ONAY İSTİYOR düğme almaz: onay isteyen pencere yalnız kendi talebinin kararını ya da kendi sohbetindeki sözü kabul eder.
  * @param {any} p
  * @param {{ dogrulandi?: boolean } | null | undefined} kaynakBilgi
  * @param {unknown} sonKartlar
@@ -407,6 +407,9 @@ export function kartDurumu(eski, govde, baglantiId) {
   const ayni = e.baglanti_id === id;
   const eskiAcik = ayni && e.acik === true;
   const eskiKaynak = ayni && Array.isArray(e.kaynaklar) ? e.kaynaklar : [];
+  const gelenOnay = Number.isInteger(govde.kart_onay_bekleyen) && govde.kart_onay_bekleyen >= 0 ? govde.kart_onay_bekleyen : undefined;
+  // Sunucu sayıyı denedi ama okuyamadıysa (kart_acik true, sayı yok) eski değerle kesin konuşulmaz (tarama Ek 17 O4).
+  const onayBekleyen = gelenOnay ?? (ayni && govde.kart_acik !== true && Number.isInteger(e.onay_bekleyen) ? e.onay_bekleyen : undefined);
   const alanVar = typeof govde.kart_acik === 'boolean' || Array.isArray(govde.kart_kaynaklari);
   if (!alanVar) return null;
   const acik = typeof govde.kart_acik === 'boolean' ? govde.kart_acik : eskiAcik;
@@ -415,8 +418,8 @@ export function kartDurumu(eski, govde, baglantiId) {
     .map((k) => ({ ad: k.ad, kimlik: k.kimlik, renk: renkGecerli(k.renk) ? k.renk : null, ...(typeof k.ajan === 'string' ? { ajan: k.ajan } : {}) }));
   const yeni = new Set(gelen.map((k) => k.kimlik));
   const kaynaklar = [...gelen, ...eskiKaynak.filter((k) => k && !yeni.has(k.kimlik))].slice(0, KAYNAK_TAVANI);
-  if (ayni && acik === eskiAcik && JSON.stringify(kaynaklar) === JSON.stringify(eskiKaynak)) return null;
-  return { baglanti_id: id, acik, kaynaklar };
+  if (ayni && acik === eskiAcik && onayBekleyen === e.onay_bekleyen && JSON.stringify(kaynaklar) === JSON.stringify(eskiKaynak)) return null;
+  return { baglanti_id: id, acik, kaynaklar, ...(onayBekleyen === undefined ? {} : { onay_bekleyen: onayBekleyen }) };
 }
 
 /**

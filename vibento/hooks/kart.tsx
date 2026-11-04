@@ -11,6 +11,7 @@ import { atom, memberOf, read, update } from 'claude-code'
 import type { On } from 'claude-code'
 import { KART_DEPO_ANAHTARI, ajanGoster, bantRengi, dugmeIzni, duzMetin, kartDugmeIzni, kartPlani, kaynakBul, metinBol, soruGirisi, temizGoster, toplamCevap } from './kart-mantik.mjs'
 import { uyandirmaMetniMi } from './olay-mantik.mjs'
+import { sunucuAdresi } from './esleme-mantik.mjs'
 
 const ISTEK_ZEMINI = 'diffRemovedDimmed'
 const BANT_YAZISI = '#10241c'
@@ -26,6 +27,7 @@ const sonKartlar = atom({ plugin: 'vibento', key: 'sonKartlar' } as const, [])
 const cevaplananlar = atom({ plugin: 'vibento', key: 'cevaplananlar' } as const, [])
 const acikSoruDurumu = atom({ plugin: 'vibento', key: 'acikSoruDurumu' } as const, { acikSoru: '', soruMesajli: '' })
 const CEVAP_TAVANI = 100
+const ONAY_ADRESI = `${sunucuAdresi(undefined)}/onaylar`
 
 // Çift basış ve çizim arası: aynı kart ikinci kez göndermez.
 const gonderilen = new Set<string>()
@@ -53,13 +55,22 @@ export const kartKaydet = (on: On) => {
     try {
       // Özet satırının motor işareti kendi ağacımızda taşınmaz; özete dokunulmaz.
       if (e.props.isSummary) return next(e)
-      const durum = await $.store.get(KART_DEPO_ANAHTARI) as { acik?: unknown; kaynaklar?: unknown } | undefined
+      const durum = await $.store.get(KART_DEPO_ANAHTARI) as { acik?: unknown; kaynaklar?: unknown; onay_bekleyen?: unknown } | undefined
       if (durum?.acik !== true) return next(e)
       const plan = kartPlani(e.props.text) as ReturnType<typeof kartPlani>
       if (!plan) return next(e)
 
-      const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
+      const { Box, Text, Button, Code, Link, Markdown } = $.ui.resolve(e)
       const kapanis = plan.kapanis
+      // Etiket talep demek değil: kart sitede gerçekten bekleyen talep varsa oraya yollar (4 Kas gerçek deneme).
+      const onaySatiri = () => {
+        const sayi = durum.onay_bekleyen
+        // Sayı kişi geneli, bu isteğe ait olduğunu söylemez; adım başka penceredeyse onay orada verilir (tarama Ek 17 O1, O5).
+        if (sayi === 0) return <Text dimColor>Sitede bekleyen talep görünmüyor; onayı, adımı yapacak pencerede yazarak ver.</Text>
+        return typeof sayi === 'number'
+          ? <Text dimColor>Sitede {sayi} bekleyen var: <Link href={ONAY_ADRESI}>Onaylar</Link>; bu istek orada yoksa adımı yapacak pencerede yazarak ver.</Text>
+          : <Text dimColor>Sitede talep varsa <Link href={ONAY_ADRESI}>Onaylar</Link>; yoksa adımı yapacak pencerede yazarak ver.</Text>
+      }
       let kodSayaci = 0
       // Kod bloğu: motorun kopyalama düğmesi kartlı satırda yok, kutu ve düğme burada (ölçüm 5-7).
       // `wrap` açıkça verilir: varsayılanı panelde kırmadı (ölçüm 6). Dolgu iç kutuda: genişliği %100 kutuda satırı taşırıyor, kayma çıkıyor (ölçüm 7). En küçük genişlik sıfır ve taşan gizli: dar panelde de sağ kenar ve son kelime görünüyor (ölçüm 9).
@@ -214,6 +225,7 @@ export const kartKaydet = (on: On) => {
                       </Box>
                     )
                     : <Markdown text={temizGoster(p.metin)} />}
+                  {p.etiket === 'ONAY İSTİYOR' && k.dogrulandi ? onaySatiri() : null}
                   {!verilen && p.etiket === 'SORU' && p.kimlik && cevaplanan.includes(p.kimlik)
                     ? <Text dimColor>Bu soruya cevap verildi; yeni soruysa yazarak cevapla.</Text>
                     : null}
@@ -254,7 +266,7 @@ export const kartKaydet = (on: On) => {
                     ))
                     : null}
                   {kapanis.gorunur ? <Markdown dimColor text={temizGoster(kapanis.gorunur)} /> : null}
-                  {kaynak?.etiket === 'ONAY İSTİYOR' && !dogrulanmamis ? <Text dimColor>Bu onay sitede verilir.</Text> : null}
+                  {kaynak?.etiket === 'ONAY İSTİYOR' && !dogrulanmamis ? onaySatiri() : null}
                   <Box flexDirection="row" gap={1}>
                     {gonderDugmesi}
                     {verilen ? <Text dimColor>Cevabın: {verilen}</Text> : null}
