@@ -21,9 +21,19 @@ const SORU_ETIKETI = /^(?:\*\*)?([^*·\n]{1,200}?) · ([^*·\n]{1,120}?) · (SOR
 const GORUNMEZ = /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
 const GORUNMEZ_HEPSI = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 const SORU_YASAK = /[<>`~]/;
-const SECENEK_ETIKETI = /^[\p{L}\p{N} -]{1,40}$/u;
+// Dosya adı çoğunlukla ters tırnakla yazılıyor (4 Kas gerçek yanıt). Satır içi çift içeriği gizlemez; içi yine denetlenir, çift olmayan tırnak yasak.
+const TIRNAK_CIFTI = /`([^`\n]{1,200})`/g;
+const tirnaksiz = (s) => s.replace(TIRNAK_CIFTI, '$1');
+const soruYasakMi = (s) => SORU_YASAK.test(tirnaksiz(s));
+// Türkçe ek apostrofla yazılıyor ("Google'u bekleyelim", 4 Kas gerçek yanıt).
+const SECENEK_ETIKETI = /^[\p{L}\p{N} '\u2019-]{1,40}$/u;
 const SECENEK_SATIRI = /^(?:\d{1,2}[.)]\s+)?(.{1,200}?)\s*\[([^[\]]{1,300})\]\s*[.?!]?\s*$/u;
 const EVET_HAYIR = /\bevet\s*(?:\/|ya da|veya)\s*hayır\s*[.?!]?\s*$/iu;
+// Soru ile İz arasında yalnız bilinen Park satırı ayrılır (4 Kas gerçek yanıt). İzin listesi: serbest etikette asıl içerik düğmenin dışına kaçar (tarama Ek 18 O1).
+const PARK_SATIRI = /^\*\*Park(?: \(konuşulacak\))?:\*\*/u;
+const PARK_TAVANI = 3;
+const SINIF_ADI = /ONAY|SORU|BİLGİ/u;
+const ARA_YASAK = /[&\[\uFF3B\uFF3D\p{Zl}\p{Zp}]|evet|hay[ıI]r/iu;
 const EN_COK_SORU = 6;
 const EN_COK_SECENEK = 6;
 const IZ = /^\*\*İz:\*\*/u;
@@ -32,7 +42,7 @@ const KOD_ACILIS = /^([ \t]*)(`{3,}|~{3,})([^`\n]*)$/;
 const KOD_KAPANIS = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
 const KOD_KUTU_TAVANI = 200;
 const SORU_SATIR_TAVANI = 400;
-const SORU_ISARETI = /[?\uFF1F\u061F]/g;
+const SORU_ISARETI = /[?\uFF1F\u061F\uFE56\uFE16\u2047-\u2049\u037E\u055E\u1367\uA60F\u2753\u2754\u2E2E\u00BF]/g;
 const KOD_TEMIZLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]|[^\P{Cc}\t\n]/gu;
 
 /** Çit kapanıyor mu: aynı karakter, en az açılış kadar uzun. Kart ve kod kutusu aynı kuralı izler (tarama D1). */
@@ -63,6 +73,26 @@ function katlanirMi(satir) {
 }
 
 /**
+ * Soruyu izleyen satırlarda sondan Park satırlarını ayırır: soruya karışınca düğme bütün soru için kapanıyordu.
+ * Sorudaki kapılar burada da geçerli, uzunluk düzenli ifadelerden önce (tarama Ek 18 O3, O4). Soru ya da seçenek taşıyan satır ayrılmaz: ekrandaki soru sayısı düğmeyle tutsun (Ek 13 O1).
+ * @param {string[]} satirlar
+ * @returns {number} soruya kalan satır sayısı
+ */
+function araSatirKes(satirlar) {
+  let kes = satirlar.length;
+  let park = 0;
+  for (let i = satirlar.length - 1; i >= 0; i -= 1) {
+    const s = satirlar[i].trim();
+    if (s === '') continue;
+    if (park === PARK_TAVANI) break;
+    if (s.length > SORU_SATIR_TAVANI || !PARK_SATIRI.test(s) || GORUNMEZ.test(s) || soruYasakMi(s) || soruSayisi(s) > 0 || ARA_YASAK.test(s) || SINIF_ADI.test(s)) break;
+    park += 1;
+    kes = i;
+  }
+  return kes;
+}
+
+/**
  * Kapanış bloğunu ayırır. Blok ancak yanıtın sonunda, `**İz:**` son dolu satırken geçerlidir; yazılırken (akış) ya da biçim dışıysa null.
  * @param {string[]} satirlar
  * @returns {{ bas: number, soru: string, gorunur: string, ayrinti: string } | null} istek yoksa da null
@@ -77,7 +107,16 @@ function kapanisBul(satirlar) {
   }
   if (senden < 0) return null;
   const ilk = SENDEN.exec(satirlar[senden])?.[1] ?? '';
-  const soru = [ilk, ...satirlar.slice(senden + 1, son)].join('\n').trim();
+  const ara = satirlar.slice(senden + 1, son);
+  // Düğme kalan soruya çıkmıyorsa ayırmanın faydası yok, satır soruda kalır: istek kırmızıdan çıkmasın (tarama Ek 18 O6).
+  const aday = araSatirKes(ara);
+  const kisa = [ilk, ...ara.slice(0, aday)].join('\n').trim();
+  const kisaEtiket = SORU_ETIKETI.exec(kisa);
+  const kisaGovde = kisaEtiket && temizAd(kisaEtiket[1]) && temizAd(kisaEtiket[2]) ? kisa.slice(kisaEtiket[0].length).trim() : kisa;
+  const kes = aday < ara.length && secenekCoz(kisaGovde) ? aday : ara.length;
+  const soru = [ilk, ...ara.slice(0, kes)].join('\n').trim();
+  // Eşitlik anahtarı ara satırı da görür: aynı soru başka ara satırla yeni sorudur (tarama Ek 18 O5).
+  const tam = [ilk, ...ara].join('\n').trim();
   if (istekYok(soru)) return null;
   let bas = senden;
   for (let i = senden - 1; i >= 0; i -= 1) {
@@ -86,16 +125,16 @@ function kapanisBul(satirlar) {
     bas = i;
   }
   const blok = satirlar.slice(bas, senden).filter((s) => s.trim() !== '');
-  const gorunur = blok.filter((s) => !katlanirMi(s)).join('\n');
+  const gorunur = [...blok.filter((s) => !katlanirMi(s)), ...ara.slice(kes).filter((s) => s.trim() !== '')].join('\n');
   const ayrinti = [...blok.filter(katlanirMi), satirlar[son]].join('\n');
   const e = SORU_ETIKETI.exec(soru);
   const pencere = e ? temizAd(e[1]) : '';
   const ajan = e ? temizAd(e[2]) : '';
   const govdeSoru = e ? soru.slice(e[0].length).trim() : soru;
   if (e && pencere && ajan && govdeSoru) {
-    return { bas, soru: govdeSoru, gorunur, ayrinti, kaynak: { pencere, ajan, etiket: e[3], kimlik: e[4] ?? null } };
+    return { bas, soru: govdeSoru, tam, gorunur, ayrinti, kaynak: { pencere, ajan, etiket: e[3], kimlik: e[4] ?? null } };
   }
-  return { bas, soru, gorunur, ayrinti, kaynak: null };
+  return { bas, soru, tam, gorunur, ayrinti, kaynak: null };
 }
 
 /**
@@ -108,7 +147,10 @@ function kapanisBul(satirlar) {
 export function secenekCoz(soru) {
   if (typeof soru !== 'string' || soru.length === 0) return null;
   const satirlar = soru.split('\n').map((s) => s.trim()).filter((s) => s.length > 0);
-  if (satirlar.some((s) => s.length > SORU_SATIR_TAVANI || GORUNMEZ.test(s) || SORU_YASAK.test(s))) return null;
+  if (satirlar.some((s) => s.length > SORU_SATIR_TAVANI || GORUNMEZ.test(s) || soruYasakMi(s))) return null;
+  // Ters tırnak düz çizilir: numara, pencere etiketi ve evet/hayır tırnak ardına saklanıp kapılardan geçmesin (tarama Ek 18 ek tur N1-N3).
+  const duzSatirlar = satirlar.map(tirnaksiz);
+  if (duzSatirlar.some((s, i) => SORU_ETIKETI.test(s) || (/^\d{1,2}[.)]\s/.test(s) && !/^\d{1,2}[.)]\s/.test(satirlar[i])))) return null;
   if (satirlar.length === 1 && EVET_HAYIR.test(satirlar[0]) && !/^\d{1,2}[.)]\s/.test(satirlar[0])) {
     const metin = satirlar[0].replace(EVET_HAYIR, '').trim();
     if (metin.length === 0 || metin.length > 200 || soruSayisi(metin) > 1) return null;
@@ -117,7 +159,7 @@ export function secenekCoz(soru) {
   const govde = satirlar.length > 1 && !SECENEK_SATIRI.test(satirlar[0]) && !/^\d{1,2}[.)]\s/.test(satirlar[0]) ? satirlar.slice(1) : satirlar;
   if (govde.length === 0 || govde.length > EN_COK_SORU) return null;
   // Atılan giriş satırı soru taşıyorsa ekrandaki soru sayısı düğmeyle tutmaz: tek tık başka soruya evet sayılabilir (tarama O1).
-  if (govde.length < satirlar.length && (soruSayisi(satirlar[0]) > 0 || satirlar[0].includes('[') || EVET_HAYIR.test(satirlar[0]))) return null;
+  if (govde.length < satirlar.length && (soruSayisi(satirlar[0]) > 0 || satirlar[0].includes('[') || EVET_HAYIR.test(duzSatirlar[0]))) return null;
   // Düğme satırı 1, 2 diye gider: yazılı numara başka olursa cevap yanlış soruya okunur (tarama O2).
   const numaralar = govde.map((s) => /^(\d{1,2})[.)]\s+/u.exec(s));
   if (numaralar.some((n) => n !== null) && numaralar.some((n, i) => n === null || Number(n[1]) !== i + 1)) return null;
@@ -169,7 +211,7 @@ export function cevapMetni(secimler) {
 /**
  * Düğme bu kartta çıkar mı. Yalnız son yanıt (`sonSoru`: Stop yazar, yeni istem siler; yeniden yüklemede boş). Başka pencereden geliyorsa doğrulanmış olmalı ve onay istemi olmamalı:
  * onay yalnız sitede. Mesaj gelen turda etiketsiz soruya düğme yok: pencere mesajı kendi sorusu gibi görünmesin (tarama Ek 12 Y2).
- * @param {{ soru: string, kaynak: { etiket: string } | null }} kapanis
+ * @param {{ tam: string, kaynak: { etiket: string } | null }} kapanis ara satırı da gören eşitlik anahtarı `tam`: sonSoru ve açık soru onu tutar
  * @param {{ dogrulandi: boolean } | null} kaynakBilgi
  * @param {string} sonSoru
  * @param {boolean} mesajliTur
@@ -177,9 +219,9 @@ export function cevapMetni(secimler) {
  * @returns {boolean}
  */
 export function dugmeIzni(kapanis, kaynakBilgi, sonSoru, mesajliTur, acikSoru = '') {
-  if (!sonSoru || sonSoru !== kapanis.soru) return false;
+  if (!sonSoru || sonSoru !== kapanis.tam) return false;
   if (kapanis.kaynak) return kaynakBilgi?.dogrulandi === true && kapanis.kaynak.etiket !== 'ONAY İSTİYOR';
-  return !mesajliTur || (acikSoru !== '' && acikSoru === kapanis.soru);
+  return !mesajliTur || (acikSoru !== '' && acikSoru === kapanis.tam);
 }
 
 /**
@@ -237,8 +279,8 @@ export function toplamCevap(kartlar, kapanis, kapanisKimlik = null) {
   return `${parca.join('; ')}.`;
 }
 
-/** Düz çizilen satırı saran kalın işareti atar; satır içindeki yıldızlara dokunmaz. */
-export const duzMetin = (metin) => String(metin ?? '').replace(/^\*\*(.+)\*\*$/u, '$1');
+/** Düz çizilen satırı saran kalın işareti ve satır içi ters tırnak çiftini atar; satır içindeki yıldızlara dokunmaz. */
+export const duzMetin = (metin) => String(metin ?? '').replace(/^\*\*(.+)\*\*$/u, '$1').replace(TIRNAK_CIFTI, '$1');
 
 /** Karta çizilen soruda görünmez ve yön karakteri kalmaz: görünen, okunanla aynı olsun. */
 export const temizGoster = (metin) => String(metin ?? '').replace(GORUNMEZ_HEPSI, '');
@@ -323,7 +365,7 @@ const temizAd = (ad) => ad.replace(/[\p{Cc}\p{Cf}]/gu, '').replace(/\s+/g, ' ').
 /**
  * Yanıt metni → çizim planı. Çizilecek bir şey yoksa null: satıra dokunulmaz.
  * @param {unknown} metin
- * @returns {{ parcalar: ({ tur: 'metin', metin: string } | { tur: 'kart', pencere: string, ajan: string, etiket: 'SORU' | 'ONAY İSTİYOR' | 'BİLGİ', kimlik: string | null, metin: string, sorular: { metin: string, secenekler: string[], coklu: boolean }[] | null })[], kapanis: { soru: string, gorunur: string, ayrinti: string, kaynak: { pencere: string, ajan: string, etiket: 'SORU' | 'ONAY İSTİYOR' | 'BİLGİ', kimlik: string | null } | null, sorular: { metin: string, secenekler: string[], coklu: boolean }[] | null } | null } | null}
+ * @returns {{ parcalar: ({ tur: 'metin', metin: string } | { tur: 'kart', pencere: string, ajan: string, etiket: 'SORU' | 'ONAY İSTİYOR' | 'BİLGİ', kimlik: string | null, metin: string, sorular: { metin: string, secenekler: string[], coklu: boolean }[] | null })[], kapanis: { soru: string, tam: string, gorunur: string, ayrinti: string, kaynak: { pencere: string, ajan: string, etiket: 'SORU' | 'ONAY İSTİYOR' | 'BİLGİ', kimlik: string | null } | null, sorular: { metin: string, secenekler: string[], coklu: boolean }[] | null } | null } | null}
  */
 export function kartPlani(metin) {
   if (typeof metin !== 'string' || metin.length === 0 || metin.length > METIN_TAVANI) return null;
@@ -368,7 +410,7 @@ export function kartPlani(metin) {
   say(k?.kaynak?.kimlik);
   const tekrar = (kimlik) => Boolean(kimlik) && (kimlikSayisi.get(kimlik) ?? 0) > 1;
   for (const p of parcalar) if (p.tur === 'kart' && tekrar(p.kimlik)) p.sorular = null;
-  return { parcalar, kapanis: k ? { soru: k.soru, gorunur: k.gorunur, ayrinti: k.ayrinti, kaynak: k.kaynak, sorular: tekrar(k.kaynak?.kimlik) ? null : secenekCoz(k.soru) } : null };
+  return { parcalar, kapanis: k ? { soru: k.soru, tam: k.tam, gorunur: k.gorunur, ayrinti: k.ayrinti, kaynak: k.kaynak, sorular: tekrar(k.kaynak?.kimlik) ? null : secenekCoz(k.soru) } : null };
 }
 
 const renkGecerli = (r) => typeof r === 'string' && /^#[0-9A-Fa-f]{6}$/.test(r);

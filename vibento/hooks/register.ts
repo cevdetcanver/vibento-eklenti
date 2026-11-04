@@ -216,10 +216,11 @@ export const register: Register = (on, options) => {
       try {
         const plan = kartPlani(e.last_assistant_message)
         const soru = plan?.kapanis?.soru ?? ''
-        await update($, sonSoru, () => soru)
+        const tam = plan?.kapanis?.tam ?? ''
+        await update($, sonSoru, () => tam)
         await update($, sonKartlar, () => sonKartlarOku(plan))
         const mesajli = (await read($, mesajliTur)) === true
-        const kendiSorusu = plan?.kapanis?.kaynak ? '' : soru
+        const kendiSorusu = plan?.kapanis?.kaynak ? '' : tam
         await update($, acikSoruDurumu, (eski) => acikSoruGuncelle(eski, kendiSorusu, mesajli))
         // Metin anahtarı yalnız art arda yinelemeyi kapatır: soru değişince aynı metin yeniden düğme alır (tarama Ek 16 O2).
         await update($, cevaplananlar, (eski) => eski.filter((k) => /^[0-9a-f]{6}$/.test(k) || k === soru))
