@@ -74,12 +74,32 @@ export function isGecerli(is) {
  * Tek yoklayan: başka oturumun taze kaydı varsa bu pencere yoklamaz; kendi kaydı ya da bayat kayıt üstüne yazılır.
  * Yarış zararsızdır (iş alma ve bağlantı başına koşu tavanı sunucuda atomik); kayıt yalnız boşa isteği azaltır.
  */
-export function yoklayanKarari(kayit, oturum, simdiMs) {
+/** Sürüm kıyası: a < b ise negatif, eşitse 0 (sayısal; '0.1.9' < '0.1.10'). */
+export function surumKiyas(a, b) {
+  const p = (s) => String(s ?? '').split('.').map((x) => Number(x) || 0);
+  const [x, y] = [p(a), p(b)];
+  for (let i = 0; i < 3; i += 1) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  }
+  return 0;
+}
+
+/**
+ * Tek yoklayan kararı. Kilit kaydı `{ oturum, at, surum? }`. Başka oturumun 90 sn'den taze kaydı yoklamayı durdurur; AMA kaydın
+ * sürümü bizden düşükse (ya da yoksa: 0.1.16 ve öncesi sürüm yazmaz) kilit DEVRALINIR (0.1.17, 5 Kas: eklenti güncellemesi açık
+ * pencereye ulaşmaz, eski çalıştırıcı yeni iş türlerini sormaz; hafif iş 15 dk kuyrukta kaldı). Bizden yeni sürüme boyun eğilir.
+ * `surum` verilmezse eski davranış (yalnız tazelik).
+ */
+export function yoklayanKarari(kayit, oturum, simdiMs, surum = null) {
   const k = kayit && typeof kayit === 'object' ? kayit : null;
   const sahip = typeof k?.oturum === 'string' ? k.oturum : null;
   const at = Date.parse(typeof k?.at === 'string' ? k.at : '');
   const taze = Number.isFinite(at) && simdiMs - at < TEK_YOKLAYAN_MS && at - simdiMs < TEK_YOKLAYAN_MS;
-  if (sahip && sahip !== oturum && taze) return { yokla: false, yaz: false };
+  if (sahip && sahip !== oturum && taze) {
+    const sahipSurum = typeof k?.surum === 'string' ? k.surum : '0.0.0';
+    if (typeof surum === 'string' && surum && surumKiyas(sahipSurum, surum) < 0) return { yokla: true, yaz: true };
+    return { yokla: false, yaz: false };
+  }
   return { yokla: true, yaz: true };
 }
 

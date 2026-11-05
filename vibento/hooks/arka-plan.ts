@@ -14,6 +14,7 @@ import {
   ES_ZAMANLI_TAVAN, IKILI_KLASORLERI, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
   acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yerelIkililer, yoklayanKarari,
 } from './arka-plan-mantik.mjs'
+import { SURUM } from './esleme-mantik.mjs'
 
 type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number; amac?: string | null; yeni_konusma?: boolean }
 type Zamanlayici = { cancel(): void }
@@ -124,9 +125,9 @@ export function arkaPlanKur(istek: Istek) {
       const yol = `${ev}/${YOKLAYAN_DOSYASI}`
       let kayit: unknown = null
       try { kayit = JSON.parse(await io.dosyaOku(yol)) } catch { kayit = null }
-      const karar = yoklayanKarari(kayit, oturum, simdi)
+      const karar = yoklayanKarari(kayit, oturum, simdi, SURUM)
       if (!karar.yokla) return
-      if (karar.yaz) { try { await io.dosyaYaz(yol, JSON.stringify({ oturum, at: new Date(simdi).toISOString() })) } catch { /* yazılamazsa yine yoklar */ } }
+      if (karar.yaz) { try { await io.dosyaYaz(yol, JSON.stringify({ oturum, at: new Date(simdi).toISOString(), surum: SURUM })) } catch { /* yazılamazsa yine yoklar */ } }
       if (kosanlar.size >= ES_ZAMANLI_TAVAN) return
       const y = await istek(io, token, '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum, turler: ['yeni', 'devam', 'hafif'] }, 8_000)
       if (!y.ok || y.govde?.ok !== true) return
