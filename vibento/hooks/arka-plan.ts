@@ -11,8 +11,8 @@
 import type { Io, Surec } from './io.ts'
 import type { Istek } from './senk.ts'
 import {
-  ES_ZAMANLI_TAVAN, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
-  acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, isGecerli, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yoklayanKarari,
+  ES_ZAMANLI_TAVAN, IKILI_KLASORLERI, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
+  acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yerelIkililer, yoklayanKarari,
 } from './arka-plan-mantik.mjs'
 
 type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number }
@@ -52,6 +52,24 @@ export function arkaPlanKur(istek: Istek) {
     }
   }
 
+  /** Claude ikilisi: önce ortam değişkeni; yoksa uzantı klasörleri (bu işletim sisteminin en yeni sürümü), sonra yerel kurulum. 5 Kas canlı
+   *  deneme: Panel penceresinde `$.env.get('CLAUDE_CODE_EXECPATH')` boş döndü ve iş `ikili_yok` ile düştü; yol artık diskten bulunur. */
+  async function ikiliBul(io: Io): Promise<string | null> {
+    try { const e = await io.ortam?.('CLAUDE_CODE_EXECPATH'); if (typeof e === 'string' && e.length > 0) return e } catch { /* ortam okunamadı */ }
+    const ev = await io.evKlasoru()
+    if (!ev) return null
+    const windows = (await io.sistemKlasoru()) !== null
+    for (const k of IKILI_KLASORLERI) {
+      let girdiler: { name: string }[] = []
+      try { girdiler = await io.dizin(`${ev}/${k}`) } catch { continue }
+      for (const yol of ikiliAdaylari(`${ev}/${k}`, girdiler, windows)) {
+        if ((await io.dosyaBoyu(yol)) !== null) return yol
+      }
+    }
+    for (const yol of yerelIkililer(ev, windows)) if ((await io.dosyaBoyu(yol)) !== null) return yol
+    return null
+  }
+
   async function kos(io: Io, token: string, is: Is) {
     const bas = await io.simdi()
     kosanlar.set(is.id, () => {})
@@ -59,8 +77,12 @@ export function arkaPlanKur(istek: Istek) {
     let bekci: Zamanlayici | null = null
     try {
       if (await acikMi(io, is.dis_seans_id)) { await kisaBitir(io, token, is.id, 'atlandi', 'acik'); return }
-      const ikili = await io.ortam?.('CLAUDE_CODE_EXECPATH')
-      if (!ikili || !io.surec) { await kisaBitir(io, token, is.id, 'hata', ikili ? 'surec_yok' : 'ikili_yok'); return }
+      const ikili = await ikiliBul(io)
+      if (!ikili || !io.surec) {
+        await kisaBitir(io, token, is.id, 'hata', ikili ? 'surec_yok' : 'ikili_yok')
+        if (!ikili) { try { io.bildir('Vibento: arka plan turu için Claude ikilisi bulunamadı (ortam değişkeni ve uzantı klasörü yok).') } catch { /* görünüm */ } }
+        return
+      }
       try { await io.dizin(is.klasor) } catch { await kisaBitir(io, token, is.id, 'hata', 'klasor_yok'); return }
       const akis: Surec = io.surec(argumanlar(is, ikili), is.klasor, ortamEkleri())
       const it = typeof akis[Symbol.asyncIterator] === 'function' ? (akis[Symbol.asyncIterator] as () => Surec)() : akis

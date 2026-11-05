@@ -191,3 +191,34 @@ export function bitisGovdesi(id, karar, sonuc, sureMs) {
     sure_ms: Math.max(0, Math.round(Number(sureMs) || 0)),
   };
 }
+
+// --- Claude ikilisinin yeri (5 Kas canlı deneme: Panel penceresinde `$.env.get('CLAUDE_CODE_EXECPATH')` boş döndü, iş `ikili_yok` ile
+// düştü) → ortam değişkeni yoksa yol diskten bulunur: VS Code uzantı klasörleri (bu işletim sistemine ait en yeni sürüm), sonra yerel kurulum.
+export const IKILI_KLASORLERI = ['.vscode/extensions', '.vscode-insiders/extensions', '.cursor/extensions', '.windsurf/extensions'];
+const UZANTI_ADI = /^anthropic\.claude-code-(\d+)\.(\d+)\.(\d+)-(win32|darwin|linux)-([a-z0-9]+)$/;
+
+/**
+ * Uzantı klasörü girdilerinden aday ikili yolları: yalnız bu işletim sisteminin sürümleri, en yeni önce (sayısal kıyas: 2.1.318 > 2.1.9).
+ * Yol birebir kurulur, kabuk yok; var olup olmadığına çağıran bakar.
+ * @param {string} kok uzantı klasörü
+ * @param {unknown} girdiler `io.dizin` çıktısı
+ * @param {boolean} windows
+ * @returns {string[]}
+ */
+export function ikiliAdaylari(kok, girdiler, windows) {
+  const adaylar = [];
+  for (const g of Array.isArray(girdiler) ? girdiler : []) {
+    const ad = typeof g?.name === 'string' ? g.name : '';
+    const m = UZANTI_ADI.exec(ad);
+    if (!m) continue;
+    if ((m[4] === 'win32') !== windows) continue;
+    adaylar.push({ ad, surum: [Number(m[1]), Number(m[2]), Number(m[3])] });
+  }
+  adaylar.sort((a, b) => (b.surum[0] - a.surum[0]) || (b.surum[1] - a.surum[1]) || (b.surum[2] - a.surum[2]) || a.ad.localeCompare(b.ad));
+  return adaylar.map((a) => `${kok}/${a.ad}/resources/native-binary/claude${windows ? '.exe' : ''}`);
+}
+
+/** Yerel kurulum yolları (resmî kurulum betiği ve Homebrew): sırayla denenir. */
+export function yerelIkililer(ev, windows) {
+  return windows ? [`${ev}/.local/bin/claude.exe`] : [`${ev}/.local/bin/claude`, '/opt/homebrew/bin/claude', '/usr/local/bin/claude'];
+}
