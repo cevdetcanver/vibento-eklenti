@@ -2,7 +2,7 @@
 // eklenti/vibento/hooks/esleme.ts — eşleme akışı (3g-3; sözleşme docs/sozlesme-3g-esleme.md §1, §4, §5).
 //
 // Jeton yoksa: kod iste (bekleyen varsa onu kullan) → açılışta ve ilk istemlerde kullanıcı kodunu göster → arka planda yokla → `tamam`da
-// jetonu `$.store`'a koy. Jeton varsa: 30 günde bir yenile. Her hata sessiz (kırmızı çizgi "hook turu asla bozmaz"): tur hiç beklemez,
+// jetonu `$.store`'a koy. Jeton varsa: günde bir yenile (Y-3; açılışta ve vakti gelmişse istemde). Her hata sessiz (kırmızı çizgi "hook turu asla bozmaz"): tur hiç beklemez,
 // ağ hatası bir sonraki olayda yeniden denenir. Cihaz kodu ve jeton hiçbir metne, uyarıya ya da günlüğe girmez.
 // =====================================================================
 
@@ -260,7 +260,14 @@ export function eslemeKur(sunucu: string) {
     async istem(io: Io): Promise<string | null> {
       try {
         if (baglandiDuyur) { const s = baglandiDuyur; baglandiDuyur = null; return s }
-        if (await baglantiOku(io)) return null
+        const bagli = await baglantiOku(io)
+        if (bagli) {
+          // Y-3: pencere günlerce açık kalabilir; günlük yenileme yalnız açılışa bağlı kalmaz, vakti gelmişse istemde de yapılır (kilitli, ≤ 6 sn, günde bir).
+          if (!yenilemeZamani(bagli, Date.now())) return null
+          await jetonYenile(io, bagli)
+          if (await baglantiOku(io)) return null
+          // Yenileme ucu 401 verdi, bağlantı silindi: aşağıda kod istenir.
+        }
         let b = await bekleyenOku(io)
         const simdi = await io.simdi()
         if (!b && kodIstekSayisi < KOD_ISTEK_TAVANI && simdi - sonKodIstegi >= KOD_ISTEK_ARALIGI_MS) {

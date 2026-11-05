@@ -9,7 +9,7 @@
 
 export const ISTEMCI = 'claude-code';
 // `.claude-plugin/plugin.json` sürümüyle aynı (test denetler); sunucuya `istemci_surum` olarak gider.
-export const SURUM = '0.1.18';
+export const SURUM = '0.1.19';
 export const BAGLANTI_ANAHTARI = 'vibento.baglanti';
 export const ESLEME_ANAHTARI = 'vibento.esleme';
 export const VARSAYILAN_SUNUCU = 'https://vibento.app';
@@ -17,8 +17,9 @@ export const EN_KISA_ARALIK_SN = 5;
 export const YAVASLA_EK_SN = 5;
 // Kod geçerliyken istem kancasında en çok bu kadar istemde hatırlatılır (sözleşme §1 adım 2).
 export const ISTEM_HATIRLATMA = 3;
-// Jeton 30 günde bir yenilenir (sözleşme §4 "kendiliğinden yenilenen").
-export const YENILEME_GUN = 30;
+// Jeton günde bir yenilenir (Y-3, 0.1.19; sözleşme anahtar-donusumu §1 madde 1): sunucu 7 günü aşan jetonu reddeder, çalınan kopya en geç
+// 24 saatte ölür. Yenileme açılışta ve vakti gelmişse istemde (esleme.ts); çalıştırıcı jetonu depodan okur (arka-plan.ts).
+export const YENILEME_GUN = 1;
 // Sonu yaklaşan kod gösterilmez: kullanıcı siteye yazana kadar dolar, yeni kod istenir (2 Kas Mac ölçümü).
 export const KOD_ASGARI_MS = 120_000;
 // Açık konuşmada yeni kod isteme aralığı ve tavanı: her istem sunucuya gitmesin, IP kotası (saatte 10) bir makine yüzünden bitmesin.

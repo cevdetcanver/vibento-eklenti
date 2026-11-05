@@ -14,7 +14,7 @@ import {
   ES_ZAMANLI_TAVAN, IKILI_KLASORLERI, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
   acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yerelIkililer, yoklayanKarari,
 } from './arka-plan-mantik.mjs'
-import { SURUM } from './esleme-mantik.mjs'
+import { BAGLANTI_ANAHTARI, SURUM } from './esleme-mantik.mjs'
 
 type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number; amac?: string | null; yeni_konusma?: boolean }
 type Zamanlayici = { cancel(): void }
@@ -25,8 +25,18 @@ export function arkaPlanKur(istek: Istek) {
   let kapaliyaKadar = 0
   const kosanlar = new Map<string, () => void>()
 
-  const bitir = (io: Io, token: string, govde: Record<string, unknown>) =>
-    istek(io, token, '/api/pencere-isi/bitir', 'POST', govde, 8_000)
+  /** Y-3 (0.1.19): jeton günde bir değişir ve eski jeton anında ölür; çalıştırıcı açılışta aldığı jetonu değil depodaki güncel jetonu kullanır. Depo okunamazsa açılıştaki. */
+  async function jeton(io: Io, yedek: string): Promise<string> {
+    try {
+      const k = (await io.depoOku(BAGLANTI_ANAHTARI)) as { token?: unknown } | null
+      return typeof k?.token === 'string' && k.token.length > 0 ? k.token : yedek
+    } catch {
+      return yedek
+    }
+  }
+
+  const bitir = async (io: Io, token: string, govde: Record<string, unknown>) =>
+    istek(io, await jeton(io, token), '/api/pencere-isi/bitir', 'POST', govde, 8_000)
   const kisaBitir = (io: Io, token: string, id: string, durum: string, hata: string | null) =>
     bitir(io, token, { id, durum, hata, toplam_usd: null, kullanim: null, model: null, sure_ms: null })
 
@@ -92,7 +102,7 @@ export function arkaPlanKur(istek: Istek) {
       kosanlar.set(is.id, durdur)
       // Süre tavanı çıktıdan bağımsız: parça gelmese de dolunca süreç ölür, kira uzamaz.
       bekci = io.sonra(TUR_SURE_TAVANI_MS, durdur)
-      kira = io.herBirde(KIRA_YENILEME_MS, () => { if (!kesildi) void istek(io, token, '/api/pencere-isi/kira', 'POST', { id: is.id }, 8_000) })
+      kira = io.herBirde(KIRA_YENILEME_MS, () => { if (!kesildi) void jeton(io, token).then((t) => istek(io, t, '/api/pencere-isi/kira', 'POST', { id: is.id }, 8_000)) })
       let cikti = ''
       let kod: number | null = null
       for (;;) {
@@ -129,7 +139,7 @@ export function arkaPlanKur(istek: Istek) {
       if (!karar.yokla) return
       if (karar.yaz) { try { await io.dosyaYaz(yol, JSON.stringify({ oturum, at: new Date(simdi).toISOString(), surum: SURUM })) } catch { /* yazılamazsa yine yoklar */ } }
       if (kosanlar.size >= ES_ZAMANLI_TAVAN) return
-      const y = await istek(io, token, '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum, turler: ['yeni', 'devam', 'hafif'] }, 8_000)
+      const y = await istek(io, await jeton(io, token), '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum, turler: ['yeni', 'devam', 'hafif'] }, 8_000)
       if (!y.ok || y.govde?.ok !== true) return
       if (y.govde.acik === false) { kapaliyaKadar = simdi + KAPALI_BEKLEME_MS; return }
       const is = y.govde.is
