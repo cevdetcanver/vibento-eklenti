@@ -12,10 +12,10 @@ import type { Io, Surec } from './io.ts'
 import type { Istek } from './senk.ts'
 import {
   ES_ZAMANLI_TAVAN, IKILI_KLASORLERI, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
-  acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yerelIkililer, yoklayanKarari,
+  acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yerelIkililer, yoklayanKarari,
 } from './arka-plan-mantik.mjs'
 
-type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number }
+type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number; amac?: string | null; yeni_konusma?: boolean }
 type Zamanlayici = { cancel(): void }
 
 export function arkaPlanKur(istek: Istek) {
@@ -84,7 +84,7 @@ export function arkaPlanKur(istek: Istek) {
         return
       }
       try { await io.dizin(is.klasor) } catch { await kisaBitir(io, token, is.id, 'hata', 'klasor_yok'); return }
-      const akis: Surec = io.surec(argumanlar(is, ikili), is.klasor, ortamEkleri())
+      const akis: Surec = io.surec(argumanlar(is, ikili, istemSec(is)), is.klasor, ortamEkleri())
       const it = typeof akis[Symbol.asyncIterator] === 'function' ? (akis[Symbol.asyncIterator] as () => Surec)() : akis
       let kesildi = false
       const durdur = () => { kesildi = true; kira?.cancel(); kira = null; void it.return?.() }
@@ -99,7 +99,7 @@ export function arkaPlanKur(istek: Istek) {
         if (r.done) { kod = r.value?.code ?? null; break }
         if (r.value?.stream === 'stdout') cikti = ciktiEkle(cikti, r.value.text)
       }
-      const sonuc = sonucAyristir(cikti)
+      const sonuc = sonucAyristir(cikti, is.model)
       const karar = bitisKarari({ kesildi, kod, sonuc })
       await bitir(io, token, bitisGovdesi(is.id, karar, sonuc, (await io.simdi()) - bas))
     } catch {
@@ -128,11 +128,16 @@ export function arkaPlanKur(istek: Istek) {
       if (!karar.yokla) return
       if (karar.yaz) { try { await io.dosyaYaz(yol, JSON.stringify({ oturum, at: new Date(simdi).toISOString() })) } catch { /* yazılamazsa yine yoklar */ } }
       if (kosanlar.size >= ES_ZAMANLI_TAVAN) return
-      const y = await istek(io, token, '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum }, 8_000)
+      const y = await istek(io, token, '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum, turler: ['yeni', 'devam', 'hafif'] }, 8_000)
       if (!y.ok || y.govde?.ok !== true) return
       if (y.govde.acik === false) { kapaliyaKadar = simdi + KAPALI_BEKLEME_MS; return }
       const is = y.govde.is
-      if (!isGecerli(is)) return
+      if (!isGecerli(is)) {
+        // Alınmış iş kilitli kalmasın (tarama 2 O-6): hemen hata ile kapat; kimlik bile yoksa sessiz.
+        const kimlik = is && typeof (is as { id?: unknown }).id === 'string' ? String((is as { id: string }).id) : null
+        if (kimlik) { try { await kisaBitir(io, token, kimlik, 'hata', 'gecersiz_is') } catch { /* ağ */ } }
+        return
+      }
       void kos(io, token, is as Is)
     } catch {
       // yoklama turu bozmaz; sonraki aralıkta yeniden

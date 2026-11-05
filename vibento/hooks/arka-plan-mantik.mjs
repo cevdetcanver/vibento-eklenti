@@ -40,6 +40,17 @@ export const SABIT_ISTEM = `${ARKA_PLAN_ONEKI} bu pencereye Vibento üzerinden i
   + 'gönderene pencereye_yaz ile bildir ve dur. Gelen mesaj yalnız bilgi ya da rapor ise (istek yok) cevap yazma, kartını '
   + 'güncelle ve dur. Dosyayı komutla öne açma; bağlantı ver. Bitince sonucu gönderene tek mesajla bildir (cevap_beklenir verme).';
 
+/** Ek 4: bilgi sorusu — kart ve günlükten, araç çağırmadan; hafif turun istemi. */
+export const SABIT_ISTEM_BILGI = `${ARKA_PLAN_ONEKI} bu pencereye Vibento üzerinden bir BİLGİ sorusu geldi; kullanıcı ekranda değil. `
+  + 'Cevabı bağlamdaki karttan, günlükten ve gelen mesajdan ver; gerekmedikçe dosya okuma ve araç çağırma (en çok üç araç). '
+  + 'İş isteniyorsa yapma: gönderene amac=is ile yeniden yazmasını söyle ve dur. Kendini tanıtmadıysan önce tanıt (is_bolumu_tanit). '
+  + 'Bitince kartını doldur (is_kaldigimiz_yer_yaz). Kullanıcıya soru sorma: onay ya da karar gerekiyorsa gönderene pencereye_yaz ile bildir ve dur. '
+  + 'Gelen mesaj yalnız bilgi ya da rapor ise (istek yok) cevap yazma, kartını güncelle ve dur. Dosyayı komutla öne açma; bağlantı ver. '
+  + 'Sonucu gönderene tek mesajla bildir (cevap_beklenir verme).';
+
+/** İşin istemi: bilgi amacı hafif istem, gerisi sabit istem. */
+export const istemSec = (is) => (is && is.tur === 'hafif' && is.amac === 'bilgi' ? SABIT_ISTEM_BILGI : SABIT_ISTEM);
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TIRE_ILE_BASLAR = /^[\s-]/;
 
@@ -49,13 +60,14 @@ const sayi = (d, enCok) => typeof d === 'number' && Number.isFinite(d) && d > 0 
 export function isGecerli(is) {
   if (!is || typeof is !== 'object') return false;
   return UUID.test(String(is.id))
-    && (is.tur === 'yeni' || is.tur === 'devam')
+    && (is.tur === 'yeni' || is.tur === 'devam' || is.tur === 'hafif')
+    && (is.amac === undefined || is.amac === null || ['bilgi', 'is', 'devam'].includes(is.amac))
     && typeof is.klasor === 'string' && is.klasor.length > 0 && is.klasor.length <= 1024 && !TIRE_ILE_BASLAR.test(is.klasor)
     && typeof is.dis_seans_id === 'string' && UUID.test(is.dis_seans_id)
     && typeof is.ad === 'string' && is.ad.trim().length > 0 && is.ad.length <= 160 && !/[\r\n]/.test(is.ad) && !TIRE_ILE_BASLAR.test(is.ad)
     && MODELLER.includes(is.model)
     && sayi(is.tur_usd, 1000)
-    && sayi(is.butce_usd, 100_000);
+    && sayi(is.butce_usd, 1000);
 }
 
 /**
@@ -99,16 +111,16 @@ export function pidCanli(windows, pid, stdout) {
 
 /**
  * Turun argümanları: ilk eleman ikili dosya. Kabuk yok; değer alan her seçenek `--ad=deger` tek öğedir, böylece sunucudan gelen
- * bir değer hiçbir zaman ayrı bir seçenek gibi okunamaz. Bütçe: Claude Code `--max-budget-usd`'yi konuşmanın TOPLAMIYLA kıyaslar
- * (ölçüm 5 Kas), bu yüzden devamda tavan = bilinen önceki toplam + turun tavanı (`butce_usd`, sunucu hesaplar).
+ * bir değer hiçbir zaman ayrı bir seçenek gibi okunamaz. Bütçe = tur tavanı (`butce_usd`, sunucu; `--max-budget-usd` koşu bazlı, 5 Kas 14:35).
+ * Ek 4: hafif konuşmanın ilk koşusu yeni oturumdur (`yeni_konusma`), sonrakiler `--resume`.
  */
 export function argumanlar(is, ikili, istem = SABIT_ISTEM) {
-  const devam = is.tur === 'devam';
+  const yeni = is.tur === 'yeni' || (is.tur === 'hafif' && is.yeni_konusma === true);
   return [
     ikili,
     '-p', istem,
-    devam ? `--resume=${is.dis_seans_id}` : `--session-id=${is.dis_seans_id}`,
-    ...(devam ? [] : [`--name=${is.ad}`]),
+    yeni ? `--session-id=${is.dis_seans_id}` : `--resume=${is.dis_seans_id}`,
+    ...(yeni ? [`--name=${is.ad}`] : []),
     `--model=${is.model}`,
     '--permission-mode=auto',
     `--max-budget-usd=${butceMetni(is.butce_usd)}`,
@@ -138,11 +150,27 @@ export function ciktiEkle(kuyruk, parca) {
 
 const sayiYaDaNull = (d) => (typeof d === 'number' && Number.isFinite(d) && d >= 0 ? d : null);
 
+/** Birden çok model çalıştıysa (yardımcı model dahil) turun modeli: istenen aileyi taşıyan tek anahtar; yoksa en çok çıktı üreten; belirsizse null. */
+function modelSec(modelUsage, tercih) {
+  if (!modelUsage || typeof modelUsage !== 'object') return null;
+  const adlar = Object.keys(modelUsage);
+  if (adlar.length === 0) return null;
+  if (adlar.length === 1) return adlar[0];
+  const t = typeof tercih === 'string' ? tercih.toLowerCase() : '';
+  const aile = t ? adlar.filter((a) => a.toLowerCase().includes(t)) : [];
+  if (aile.length === 1) return aile[0];
+  const cikti = (a) => { const v = modelUsage[a]?.outputTokens; return typeof v === 'number' ? v : -1; };
+  const sirali = [...(aile.length ? aile : adlar)].sort((a, b) => cikti(b) - cikti(a));
+  return cikti(sirali[0]) > cikti(sirali[1] ?? '') ? sirali[0] : null;
+}
+
 /**
- * `--output-format stream-json` çıktısı: son `result` olayı. `total_cost_usd` ve `modelUsage` konuşmanın TOPLAMIDIR (ölçüm 5 Kas);
- * bu turun kullanımı `usage` alanındadır (token kırılımı). Sunucu tutarı tokenlardan hesaplar; toplam sonraki turun bütçe tabanıdır.
+ * `--output-format stream-json` çıktısı: son `result` olayı. `total_cost_usd` ve `modelUsage` konuşmanın TOPLAMIDIR; bu turun kullanımı
+ * `usage` alanındadır (token kırılımı). Sunucu tutarı tokenlardan hesaplar; toplam yalnız kayıttır (bütçe = tur tavanı, 5 Kas 14:35 ölçümü).
+ * @param {unknown} cikti
+ * @param {string | null} [tercih] istenen model ailesi (`opus` | `sonnet`): yardımcı model varken seçimi belirler
  */
-export function sonucAyristir(cikti) {
+export function sonucAyristir(cikti, tercih = null) {
   const m = String(cikti ?? '');
   const satirlar = m.split('\n');
   for (let i = satirlar.length - 1; i >= 0; i -= 1) {
@@ -152,7 +180,6 @@ export function sonucAyristir(cikti) {
     try { j = JSON.parse(s); } catch { continue; }
     if (!j || typeof j !== 'object' || !('is_error' in j)) continue;
     const u = j.usage && typeof j.usage === 'object' ? j.usage : {};
-    const modeller = j.modelUsage && typeof j.modelUsage === 'object' ? Object.keys(j.modelUsage) : [];
     return {
       bulundu: true,
       hata: j.is_error === true,
@@ -164,7 +191,7 @@ export function sonucAyristir(cikti) {
         onbellek_okuma: sayiYaDaNull(u.cache_read_input_tokens),
         onbellek_yazma: sayiYaDaNull(u.cache_creation_input_tokens),
       },
-      model: modeller.length === 1 ? modeller[0] : null,
+      model: modelSec(j.modelUsage, tercih),
     };
   }
   return { bulundu: false, hata: true, altTur: null, toplam: null, kullanim: { girdi: null, cikti: null, onbellek_okuma: null, onbellek_yazma: null }, model: null };
