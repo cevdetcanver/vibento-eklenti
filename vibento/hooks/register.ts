@@ -51,7 +51,7 @@ export const register: Register = (on, options) => {
   // Boştaki pencere de anahtarın reddedildiğini yoklamada öğrenir: bildirim düşer, sonraki istemde kod gelir.
   const uyandirma = uyandirmaKur(istek, (io, jeton) => esleme.jetonReddedildi(io, jeton))
   // Arka plan pencereler (sözleşme arka-plan-pencere §4): açık pencere sunucudan iş alır, kapalı konuşmayı görünür pencere açmadan sürdürür.
-  const arkaPlan = arkaPlanKur(istek)
+  const arkaPlan = arkaPlanKur(istek, senk.senkYap)
   // Anahtar reddedildi: başka pencere yenilediyse olay yeni anahtarla bir kez yeniden gider, pencere boşa düşmez (tarama Ek 9 O3); değilse bağlantı silinir.
   const ilet = async (io: Io, k: Baglanti, olay: Record<string, unknown>, ek?: Record<string, unknown>) => {
     const y = await olaylar.ilet(io, k, olay, ek)

@@ -9,17 +9,65 @@
 // =====================================================================
 
 import type { Io, Surec } from './io.ts'
-import type { Istek } from './senk.ts'
+import type { Istek, SenkOzeti } from './senk.ts'
 import {
   ES_ZAMANLI_TAVAN, IKILI_KLASORLERI, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
-  acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, ortamEkleri, pidCanli, pidKomutu, sonucAyristir, yerelIkililer, yoklayanKarari,
+  KIMLIK_KAYDI, acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, kimlikKaydiBudama, ortamEkleri, pidCanli, pidKomutu,
+  silinecekMi, silmeKomutu, sonucAyristir, transkriptAdaylari, yerelIkililer, yoklayanKarari,
 } from './arka-plan-mantik.mjs'
 import { BAGLANTI_ANAHTARI, SURUM } from './esleme-mantik.mjs'
 
 type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number; amac?: string | null; yeni_konusma?: boolean }
 type Zamanlayici = { cancel(): void }
+/** senk.ts `senkYap`: eşitlemeyi kendisi koşturur ve son ofseti döner (silme kanıtı). */
+export type SenkYap = (io: Io, token: string, dosya: unknown, disSeansId: unknown, cwd: unknown, butceMs: number) => Promise<SenkOzeti>
 
-export function arkaPlanKur(istek: Istek) {
+/** Hafif kimliğin yerelde var olan transkriptleri (`~/.claude/projects/<klasör>/<kimlik>.jsonl`); klasör adları diskten, kimlik UUID (transkriptAdaylari). */
+export async function yerelTranskriptler(io: Io, kimlik: string): Promise<{ windows: boolean; var: { dosya: string; klasor: string }[] }> {
+  const ev = await io.evKlasoru()
+  if (!ev) return { windows: false, var: [] }
+  const windows = (await io.sistemKlasoru()) !== null
+  let klasorler: { name: string; kind: string }[] = []
+  try { klasorler = await io.dizin(`${ev}/.claude/projects`) } catch { return { windows, var: [] } }
+  const out: { dosya: string; klasor: string }[] = []
+  for (const aday of transkriptAdaylari(ev, klasorler.filter((k) => k.kind !== 'file').map((k) => k.name), kimlik)) {
+    if ((await io.dosyaBoyu(aday.dosya)) !== null) out.push(aday)
+  }
+  return { windows, var: out }
+}
+
+/**
+ * D1 (0052, tarama 4): kendi açtığı hafif konuşmanın yerel transkriptini EŞİTLEME KANITINDAN sonra siler: önce eşitlemeyi kendisi koşturur (Stop kancası
+ * beklemeden başlatır, süreç kapanınca kalan kısım gidemeyebilir), sunucu ofseti dosya boyuna eşitse dosya ve varsa `<kimlik>/` klasörü silinir. Kimlik
+ * yalnız yerel kayıttaki (bizim) ve makinede açık olmayan; yol izin listesine uymazsa silinmez; silme kabuksuz argv; hata sessiz, dosya kalır.
+ * Dönüş: silinen dosya sayısı.
+ */
+export async function transkriptSil(io: Io, senkYap: SenkYap | undefined, token: string, kimlik: string, klasor: string, bizim: boolean, acik: boolean): Promise<number> {
+  let silinen = 0
+  try {
+    if (!senkYap || !bizim || acik) return 0
+    const { windows, var: dosyalar } = await yerelTranskriptler(io, kimlik)
+    for (const aday of dosyalar) {
+      const ozet = await senkYap(io, token, aday.dosya, kimlik, klasor, 20_000)
+      const boy = await io.dosyaBoyu(aday.dosya)
+      if (ozet.hata !== null || !silinecekMi({ tur: 'hafif', bizim, acik, ofset: ozet.ofset, boy })) continue
+      const dosyaKomutu = silmeKomutu(windows, aday.dosya, false)
+      if (!dosyaKomutu) continue
+      try { await io.komut(dosyaKomutu, 5_000) } catch { continue }
+      if ((await io.dosyaBoyu(aday.dosya)) !== null) continue // silinemedi (VS Code dosyayı tutuyor olabilir): dosya kalır, sessiz
+      silinen += 1
+      let klasorVar = false
+      try { await io.dizin(aday.klasor); klasorVar = true } catch { klasorVar = false }
+      const klasorKomutu = klasorVar ? silmeKomutu(windows, aday.klasor, true) : null
+      if (klasorKomutu) { try { await io.komut(klasorKomutu, 5_000) } catch { /* klasör kalır */ } }
+    }
+  } catch {
+    // silme turu bozmaz
+  }
+  return silinen
+}
+
+export function arkaPlanKur(istek: Istek, senkYap?: SenkYap) {
   let saat: Zamanlayici | null = null
   let aktif = false
   let kapaliyaKadar = 0
@@ -63,6 +111,17 @@ export function arkaPlanKur(istek: Istek) {
     }
   }
 
+  /** Kendi açtığı hafif kimliklerin yerel kaydı (sahiplik kanıtı; tarama 4 bulgu 2). Okunamazsa boş: silme yapılmaz. */
+  async function kimlikKaydiOku(io: Io): Promise<Record<string, number>> {
+    try { return kimlikKaydiBudama(await io.depoOku(KIMLIK_KAYDI), await io.simdi()) } catch { return {} }
+  }
+  async function kimlikKaydet(io: Io, kimlik: string) {
+    try { const k = await kimlikKaydiOku(io); k[kimlik] = await io.simdi(); await io.depoYaz(KIMLIK_KAYDI, k) } catch { /* kayıt yazılamazsa silme yapılmaz */ }
+  }
+  async function kimlikSil(io: Io, kimlik: string) {
+    try { const k = await kimlikKaydiOku(io); delete k[kimlik]; await io.depoYaz(KIMLIK_KAYDI, k) } catch { /* kayıt kalır, 24 saatte düşer */ }
+  }
+
   /** Claude ikilisi: önce ortam değişkeni; yoksa uzantı klasörleri (bu işletim sisteminin en yeni sürümü), sonra yerel kurulum. 5 Kas canlı
    *  deneme: Panel penceresinde `$.env.get('CLAUDE_CODE_EXECPATH')` boş döndü ve iş `ikili_yok` ile düştü; yol artık diskten bulunur. */
   async function ikiliBul(io: Io): Promise<string | null> {
@@ -95,7 +154,19 @@ export function arkaPlanKur(istek: Istek) {
         return
       }
       try { await io.dizin(is.klasor) } catch { await kisaBitir(io, token, is.id, 'hata', 'klasor_yok'); return }
-      const akis: Surec = io.surec(argumanlar(is, ikili, istemSec(is)), is.klasor, ortamEkleri())
+      // D1 (0052, tarama 4): hafif kimliğin sahipliği yerel kayıtla kanıtlanır. Yerelde dosyası olan YABANCI kimlik koşulmaz ve asla silinmez (ele geçirilmiş
+      // sunucu insanın konuşmasını hedef gösteremez); kendi dosyamız varsa (kira bitmiş yeniden koşu) --resume ile sürer.
+      let bizim = false
+      let devamEt = false
+      if (is.tur === 'hafif') {
+        const kayit = await kimlikKaydiOku(io)
+        bizim = Object.prototype.hasOwnProperty.call(kayit, is.dis_seans_id)
+        const yerel = await yerelTranskriptler(io, is.dis_seans_id)
+        if (yerel.var.length > 0 && !bizim) { await kisaBitir(io, token, is.id, 'hata', 'kimlik_dolu'); return }
+        devamEt = yerel.var.length > 0
+        if (!bizim) { await kimlikKaydet(io, is.dis_seans_id); bizim = true }
+      }
+      const akis: Surec = io.surec(argumanlar(is, ikili, istemSec(is), { devamEt }), is.klasor, ortamEkleri())
       const it = typeof akis[Symbol.asyncIterator] === 'function' ? (akis[Symbol.asyncIterator] as () => Surec)() : akis
       let kesildi = false
       const durdur = () => { kesildi = true; kira?.cancel(); kira = null; void it.return?.() }
@@ -113,6 +184,15 @@ export function arkaPlanKur(istek: Istek) {
       const sonuc = sonucAyristir(cikti, is.model)
       const karar = bitisKarari({ kesildi, kod, sonuc })
       await bitir(io, token, bitisGovdesi(is.id, karar, sonuc, (await io.simdi()) - bas))
+      // D1 (0052, tarama 4): hafif konuşma tek kullanımlık; eşitleme kendimiz koşturulup kanıtlanınca (ofset = boy) yerel transkript silinir, kayıt düşer.
+      // Bu blok kendi başına korunur: silme hatası "başlatılamadı" bildirimine dönüşmez (tarama 4 bulgu 7).
+      if (is.tur === 'hafif' && bizim) {
+        try {
+          const acik = await acikMi(io, is.dis_seans_id)
+          const silinen = await transkriptSil(io, senkYap, await jeton(io, token), is.dis_seans_id, is.klasor, bizim, acik)
+          if (silinen > 0) await kimlikSil(io, is.dis_seans_id)
+        } catch { /* silme turu bozmaz */ }
+      }
     } catch {
       try { await kisaBitir(io, token, is.id, 'hata', 'calistirici') } catch { /* ağ yok */ }
       try { io.bildir('Vibento: arka plan pencere başlatılamadı; sunucu bir kez daha dener.') } catch { /* görünüm */ }

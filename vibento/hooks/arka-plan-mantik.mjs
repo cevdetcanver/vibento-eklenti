@@ -133,10 +133,11 @@ export function pidCanli(windows, pid, stdout) {
 /**
  * Turun argümanları: ilk eleman ikili dosya. Kabuk yok; değer alan her seçenek `--ad=deger` tek öğedir, böylece sunucudan gelen
  * bir değer hiçbir zaman ayrı bir seçenek gibi okunamaz. Bütçe = tur tavanı (`butce_usd`, sunucu; `--max-budget-usd` koşu bazlı, 5 Kas 14:35).
- * Ek 4: hafif konuşmanın ilk koşusu yeni oturumdur (`yeni_konusma`), sonrakiler `--resume`.
+ * D1 (0052): hafif konuşma tek kullanımlık, ilk koşu yeni oturumdur (`--session-id`). Tarama 4 bulgu 3: kira bitip aynı kimlik yeniden verilirse
+ * yerelde KENDİ dosyamız vardır ve `--session-id` "already in use" verir → `secenek.devamEt` ile `--resume`. `--resume` yalnız devam ve bu durumda.
  */
-export function argumanlar(is, ikili, istem = SABIT_ISTEM) {
-  const yeni = is.tur === 'yeni' || (is.tur === 'hafif' && is.yeni_konusma === true);
+export function argumanlar(is, ikili, istem = SABIT_ISTEM, secenek = {}) {
+  const yeni = is.tur === 'yeni' || (is.tur === 'hafif' && secenek.devamEt !== true);
   return [
     ikili,
     '-p', istem,
@@ -149,6 +150,62 @@ export function argumanlar(is, ikili, istem = SABIT_ISTEM) {
     '--verbose',
     '--disallowedTools', ...YASAK_ARACLAR,
   ];
+}
+
+/**
+ * D1 (0052, tarama 4): hafif turun yerel transkripti silinsin mi — yalnız hafif tür · kimlik bu çalıştırıcının KENDİ açtığı (yerel kayıt, `bizim`) ·
+ * konuşma makinede açık değil · eşitleme bitmiş: çalıştırıcının kendi koşturduğu senkronun ofseti dosya boyuna eşit ve dosya boş değil.
+ * Sunucudan gelen mesaj sayısı kapı DEĞİL (içerik bloğu sayar; Stop kancası eşitlemeyi beklemeden başlatır — tarama 4 bulgu 1).
+ */
+export function silinecekMi({ tur, bizim, acik, ofset, boy }) {
+  return tur === 'hafif' && bizim === true && acik !== true && Number.isInteger(ofset) && Number.isInteger(boy) && boy > 0 && ofset === boy;
+}
+
+/** Silinecek yol izinli karakterlerden mi (harf, rakam, `:` `/` `\` boşluk `.` `_` `-`), `..` parçası yok, 1024 altı. Uymuyorsa silme yapılmaz (cmd yeniden yorumlamasın; tarama 4 bulgu 4). */
+export function yolGuvenli(yol) {
+  if (typeof yol !== 'string' || yol.length === 0 || yol.length > 1024) return false;
+  if (!/^[\p{L}\p{N}:\\/ ._-]+$/u.test(yol)) return false;
+  return !yol.split(/[\\/]/).some((p) => p === '..');
+}
+
+/** Kendi açtığı hafif kimliklerin yerel kaydı (`$.store`): sahiplik kanıtı; silme yalnız kayıttaki kimlik için (tarama 4 bulgu 2). 24 saatten eski kayıt düşer. */
+export const KIMLIK_KAYDI = 'vibento.arka-plan.kimlikler';
+export const KIMLIK_OMRU_MS = 24 * 60 * 60 * 1000;
+/**
+ * @param {unknown} kayit depodaki kayit (nesne beklenir)
+ * @param {number} simdi
+ * @returns {Record<string, number>} (TS cagrisi icin JSDoc sart; LESSONS 5 Kas)
+ */
+export function kimlikKaydiBudama(kayit, simdi) {
+  const k = kayit && typeof kayit === 'object' && !Array.isArray(kayit) ? /** @type {Record<string, unknown>} */ (kayit) : {};
+  /** @type {Record<string, number>} */
+  const out = {};
+  for (const [id, at] of Object.entries(k)) {
+    const t = Number(at);
+    if (UUID.test(id) && Number.isFinite(t) && simdi - t < KIMLIK_OMRU_MS && t <= simdi + 60_000) out[id] = t;
+  }
+  return out;
+}
+
+/** Transkript adayları: `~/.claude/projects/<klasör>/<kimlik>.jsonl` ve `<kimlik>/`. Kimlik UUID değilse ya da klasör adı yol taşıyorsa boş (yol birleştirme güvenliği). */
+export function transkriptAdaylari(ev, projeKlasorleri, kimlik) {
+  if (typeof ev !== 'string' || !ev || typeof kimlik !== 'string' || !UUID.test(kimlik)) return [];
+  const out = [];
+  for (const k of Array.isArray(projeKlasorleri) ? projeKlasorleri : []) {
+    if (typeof k !== 'string' || !k || k === '.' || k === '..' || /[\\/]/.test(k)) continue;
+    out.push({ dosya: `${ev}/.claude/projects/${k}/${kimlik}.jsonl`, klasor: `${ev}/.claude/projects/${k}/${kimlik}` });
+  }
+  return out;
+}
+
+/** Silme komutu, kabuksuz argv: Windows `cmd /c del /q` · `rmdir /s /q` (ters bölü), POSIX `rm -f` · `rm -rf`. Yalnız verilen yol; yol izin listesine uymuyorsa null. */
+export function silmeKomutu(windows, yol, klasorMu) {
+  if (!yolGuvenli(yol)) return null;
+  if (windows) {
+    const y = yol.split('/').join(String.fromCharCode(92));
+    return klasorMu ? ['cmd', '/c', 'rmdir', '/s', '/q', y] : ['cmd', '/c', 'del', '/q', y];
+  }
+  return klasorMu ? ['rm', '-rf', yol] : ['rm', '-f', yol];
 }
 
 /** Bütçe metni: en çok 4 ondalık, bilimsel gösterim yok. */
