@@ -89,6 +89,7 @@ export function surumKiyas(a, b) {
  * sürümü bizden düşükse (ya da yoksa: 0.1.16 ve öncesi sürüm yazmaz) kilit DEVRALINIR (0.1.17, 5 Kas: eklenti güncellemesi açık
  * pencereye ulaşmaz, eski çalıştırıcı yeni iş türlerini sormaz; hafif iş 15 dk kuyrukta kaldı). Bizden yeni sürüme boyun eğilir.
  * `surum` verilmezse eski davranış (yalnız tazelik).
+ * @param {string|null} [surum] çağıranın eklenti sürümü (TS çağrısı için JSDoc şart: varsayılan `null` tek başına tipi `null` yapar)
  */
 export function yoklayanKarari(kayit, oturum, simdiMs, surum = null) {
   const k = kayit && typeof kayit === 'object' ? kayit : null;
