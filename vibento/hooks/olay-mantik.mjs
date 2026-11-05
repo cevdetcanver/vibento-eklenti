@@ -10,7 +10,7 @@ import { SURUM } from './esleme-mantik.mjs';
 
 // Eklenti bugünkü kancanın 24. sürümüyle aynı özellik sözleşmesini taşır (sunucu özellikleri sayısal sürümle açar: ≥14 pencere mesajı,
 // ≥16 uyandırma alanı, ≥20 istem öneki, ≥22 onay kararı). Bütün dilimler bitmeden eklenti dağıtılmaz.
-export const HOOK_SURUM = '24';
+export const HOOK_SURUM = '25';
 export const KUYRUK_ANAHTARI = 'vibento.kuyruk';
 export const KUYRUK_TAVANI = 500;
 export const KUYRUK_BOSALTMA = 20;
@@ -31,6 +31,9 @@ const UYANDIRMA_ESKI_METINLER = [
 ];
 
 const KAPI_YENIDEN_ADLANDIRMA = /^[/]rename(?:\s|$)/;
+/** Arka plan turunun sabit isteminin öneki (sözleşme arka-plan-pencere §4): bu istem insan istemi değildir; kapı, düğme ve fren kuralları insan gibi davranmaz. */
+export const ARKA_PLAN_ONEKI = 'Vibento arka plan:';
+
 const IDE_ETIKETLERI = ['ide_opened_file', 'ide_selection', 'browser_instruction'];
 const ISTEM_ONEK = /^<([A-Za-z_][A-Za-z0-9_-]{0,40})[\s>/]/;
 const ISTEM_ONEK_BILINEN = [
@@ -64,11 +67,12 @@ export function ideBaglamiSoy(prompt) {
   return p === 0 ? s : s.slice(p);
 }
 
-/** insan · kendiliginden · yeniden_adlandirma (birebir). */
+/** insan · kendiliginden · yeniden_adlandirma · arka_plan (sabit istem önekiyle; sunucu beyaz listesi `ISTEM_TURLERI`). */
 export function istemTuru(prompt) {
   if (typeof prompt !== 'string') return 'kendiliginden';
   const kirpik = ideBaglamiSoy(prompt);
   if (kirpik.length === 0) return 'kendiliginden';
+  if (kirpik.startsWith(ARKA_PLAN_ONEKI)) return 'arka_plan';
   if (kirpik.charAt(0) === '<' && kirpik.indexOf('<pasted_content') !== 0) return 'kendiliginden';
   if (KAPI_YENIDEN_ADLANDIRMA.test(kirpik)) return 'yeniden_adlandirma';
   return 'insan';

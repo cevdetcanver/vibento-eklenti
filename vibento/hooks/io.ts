@@ -27,4 +27,12 @@ export type Io = {
   dosyaYaz(yol: string, metin: string): Promise<void>
   dosyaOku(yol: string): Promise<string>
   mcpBagla(): Promise<void>
+  /** Arka plan pencereler (arka-plan.ts): kabuksuz süreç, çıktısı parça parça, sonu çıkış kodu. Kurulmadığı kancada yok. */
+  surec?(argv: string[], cwd: string, env: Record<string, string>): Surec
+  /** Ortam değişkeni (ikili dosyanın yolu, arka plan işareti). */
+  ortam?(ad: string): Promise<string | null | undefined>
 }
+
+export type SurecParcasi = { stream: string; text: string }
+export type SurecSonucu = { code: number | null; signal?: string | null }
+export type Surec = AsyncIterator<SurecParcasi, SurecSonucu> & Partial<AsyncIterable<SurecParcasi>>

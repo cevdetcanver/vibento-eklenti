@@ -20,6 +20,8 @@ import { olayKur } from './olay.ts'
 import { senkKur, istekYap, type Istek } from './senk.ts'
 import { altAjanEsitle } from './altajan.ts'
 import { uyandirmaKur } from './uyandirma.ts'
+import { arkaPlanKur } from './arka-plan.ts'
+import type { Surec } from './io.ts'
 
 const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, null)
 const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
@@ -48,6 +50,8 @@ export const register: Register = (on, options) => {
   const istek: Istek = (io, t, y, m, g, ms) => istekYap(io, sunucu, t, y, m, g, ms)
   // Boştaki pencere de anahtarın reddedildiğini yoklamada öğrenir: bildirim düşer, sonraki istemde kod gelir.
   const uyandirma = uyandirmaKur(istek, (io, jeton) => esleme.jetonReddedildi(io, jeton))
+  // Arka plan pencereler (sözleşme arka-plan-pencere §4): açık pencere sunucudan iş alır, kapalı konuşmayı görünür pencere açmadan sürdürür.
+  const arkaPlan = arkaPlanKur(istek)
   // Anahtar reddedildi: başka pencere yenilediyse olay yeni anahtarla bir kez yeniden gider, pencere boşa düşmez (tarama Ek 9 O3); değilse bağlantı silinir.
   const ilet = async (io: Io, k: Baglanti, olay: Record<string, unknown>, ek?: Record<string, unknown>) => {
     const y = await olaylar.ilet(io, k, olay, ek)
@@ -97,6 +101,9 @@ export const register: Register = (on, options) => {
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
+      surec: (argv, cwd, env) => $.process.spawn({ argv, cwd, env }) as unknown as Surec,
+      // Motor kuralı: `$.env.get` sabit ad ister; arka planın okuduğu iki ad burada sayılır.
+      ortam: async (ad) => (ad === 'CLAUDE_CODE_EXECPATH' ? $.env.get('CLAUDE_CODE_EXECPATH') : ad === 'VIBENTO_ARKA_PLAN' ? $.env.get('VIBENTO_ARKA_PLAN') : null),
     }
     try {
       const kod = await esleme.acilis(io)
@@ -115,6 +122,7 @@ export const register: Register = (on, options) => {
       // Açılış da pencereyi boşa düşürür: yeni açılan pencere de uyandırılabilir olmalı (kanca: `--dinle` Stop VE SessionStart'ta).
       const yeniNesil = e.source === 'startup' || e.source === 'resume' || e.source === 'clear'
       if (yeniNesil) uyandirma.basla(io, k.token, e.session_id)
+      if (yeniNesil) void arkaPlan.basla(io, k.token, e.session_id)
       // Açılış pencereyi uyandıracaksa mesajlar o turda teslim edilir; burada onaylanmaz (01-bas.mjs baglamiBas, aynı istisna).
       const uy = y.govde?.uyandirma as { acik?: unknown; bekleyen?: unknown } | undefined
       const uyanacak = yeniNesil && uy?.acik === true && Number(uy.bekleyen) > 0
@@ -293,6 +301,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     esleme.durdur()
     uyandirma.durdur(e.session_id)
+    arkaPlan.durdur()
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
       istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
