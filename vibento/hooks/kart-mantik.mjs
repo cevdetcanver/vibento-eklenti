@@ -14,7 +14,10 @@ const METIN_TAVANI = 90_000;
 const KATLANAN_TAVAN = 300;
 
 const ETIKET_SATIRI = /^\*\*([^*·\n]{1,200}?) · ([^*·\n]{1,120}?) · (SORU|ONAY İSTİYOR|BİLGİ)(?: · ([0-9a-f]{6}))?:\*\*[ \t]*(.*)$/u;
-const SENDEN = /^\*\*Senden istediğim:\*\*[ \t]*(.*)$/u;
+// Kit biçimi "**Senden istediğim:** …"; model bağlam daraltmasından sonra kalınlığı bazen düşürüyor ya da iki noktayı kalının dışına koyuyor
+// (7 Kas, Panel › Linkedin gerçek yanıtı: birkaç yanıt boyunca düğme çıkmadı). Üç yazım da satırdır: kalın, kalınsız, "**Senden istediğim**:".
+// Baştaki boşluk da tolere edilir; satır içinde geçen söz yine satır değildir. Sunucu tarafı (`onaylar/soru-okuma.ts`) zaten böyle okuyordu.
+const SENDEN = /^[ \t]*(?:\*\*)?Senden istediğim(?:\*\*)?:(?:\*\*)?[ \t]*(.*)$/u;
 // "Senden istediğim" başka pencereden geliyorsa onun etiketiyle başlar (docs/sozlesme-pencere-kartlari.md karar 9).
 // Model satırın içinde kalın işaretini bazen yazmıyor (4 Kas gerçek deneme): iki biçim de etikettir, doğrulama yine ad ve kimlikte.
 const SORU_ETIKETI = /^(?:\*\*)?([^*·\n]{1,200}?) · ([^*·\n]{1,120}?) · (SORU|ONAY İSTİYOR|BİLGİ)(?: · ([0-9a-f]{6}))?:(?:\*\*)?[ \t]*/u;
@@ -40,14 +43,15 @@ const EN_AZ_METIN = /\p{L}/u;
 
 const EVET_HAYIR = /\bevet\s*(?:\/|ya da|veya)\s*hayır\s*[.?!]?\s*$/iu;
 // Soru ile İz arasında yalnız bilinen Park satırı ayrılır (4 Kas gerçek yanıt). İzin listesi: serbest etikette asıl içerik düğmenin dışına kaçar (tarama Ek 18 O1).
-const PARK_SATIRI = /^\*\*Park(?: \(konuşulacak\))?:\*\*/u;
+const PARK_SATIRI = /^(?:\*\*)?Park(?: \(konuşulacak\))?:(?:\*\*)?/u;
 const PARK_TAVANI = 3;
 const SINIF_ADI = /ONAY|SORU|BİLGİ/u;
 // & yalnız karakter kodu biçimindeyken yasak ("Kişiler & Jargonlar" düz yazıdır, &#63; soru işaretini saklar).
 const ARA_YASAK = /&(?:#|[\p{L}\p{N}]+;?)|[\[\uFF3B\uFF3D\p{Zl}\p{Zp}]|evet|hay[ıI]r/iu;
 const EN_COK_SORU = 6;
 const EN_COK_SECENEK = 6;
-const IZ = /^\*\*İz:\*\*/u;
+// "**İz:**", "**İz**:" ve kalınsız "İz:" (7 Kas; SENDEN ile aynı tolerans).
+const IZ = /^[ \t]*(?:\*\*)?İz(?:\*\*)?:(?:\*\*)?/u;
 const KAPANIS_BASI = /^(\*\*)?(Güven:|Kural hatırlatması:|Dayanak:|Hesap defteri:|Hatırlatma:|Beklerken:)/u;
 const KOD_ACILIS = /^([ \t]*)(`{3,}|~{3,})([^`\n]*)$/;
 const KOD_KAPANIS = /^[ \t]*(`{3,}|~{3,})[ \t]*$/;
