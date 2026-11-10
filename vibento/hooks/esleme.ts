@@ -26,6 +26,10 @@ type Bekleyen = {
 const JSON_BASLIK = { 'content-type': 'application/json' }
 const YENILEME_KILIDI = 'vibento.yenileme-kilidi'
 const YARIS_BEKLEME_MS = 3_000
+// A3: kurtarma denemesi pencereler arasında tek (yaklaşık kilit) ve sunucunun önceki jetonu tanıdığı süreyle sınırlı (göç 0055: 10 dakika).
+const KURTARMA_KILIDI = 'vibento.kurtarma-kilidi'
+const KURTARMA_KILIT_MS = 20_000
+const KURTARMA_PENCERESI_MS = 600_000
 // Eşleme uçlarının üst süresi: `$.http.fetch`'in belgeli zaman aşımı yok, ağ kara deliğinde açılış ve yoklama asılı kalmasın (tarama Ek 9 O6).
 const AG_BUTCESI_MS = 6_000
 // Başlık dosyasındaki jetonun hangi bağlantıya ait olduğu: yalnız aynı bağlantının jetonu benimsenir (tarama Ek 9 Y1). Sunucuya zararsız ek başlık.
@@ -41,6 +45,8 @@ export function eslemeKur(sunucu: string) {
   let sonKodIstegi = 0
   let kodIstekSayisi = 0
   let kendiKod: { cihaz_kodu: string; bitis: string } | null = null
+  // A3: kurtarması sonuçlanmamış (yanıt yok / başka pencere deniyor) reddedilmiş jeton ve ilk reddin zamanı; süre dolana kadar silinmez.
+  let belirsiz: { token: string; ilk: number } | null = null
 
   async function baglantiOku(io: Io): Promise<Baglanti | null> {
     const k = await io.depoOku(BAGLANTI_ANAHTARI)
@@ -126,14 +132,62 @@ export function eslemeKur(sunucu: string) {
     return null
   }
 
-  // Dönüş: geçerli yeni jeton, ya da null (bağlantı silindi). 401 üç sebepten gelir: iptal, hareketsizlik, başka pencerenin yenilemesi. Kazanan pencere
-  // yanıtını henüz yazmamış olabilir (kilit tam atomik değil, ㉕ E1): önce bak, yoksa bekle, yine bak; ancak o zaman sil.
-  async function reddedildi(io: Io, reddedilen: string): Promise<string | null> {
+  // A3 (0.1.23; sunucu göç 0055): yenileme yanıtı kaybolduysa yeni jeton hiçbir yerde yoktur, eldeki jeton 401 alır. Sunucu önceki jetonu
+  // 10 dakika, yalnız yenileme ucunda ve yeni jeton hiç kullanılmadıysa tanır: silmeden önce bir kez o uçtan yeni jeton istenir.
+  // 'red': sunucu tanımadı (gerçek iptal ya da süre doldu) → silinir. 'belirsiz': yanıt yok, sunucu hatası ya da başka pencere deniyor → silinmez.
+  async function kurtar(io: Io, reddedilen: string): Promise<{ tur: 'tamam'; token: string } | { tur: 'red' } | { tur: 'belirsiz' }> {
+    try {
+      const depo = await baglantiOku(io)
+      if (!depo) return { tur: 'red' }
+      // İki okuma arasında başka pencere yazdı: onun jetonu benimsenir, silinmez.
+      if (depo.token !== reddedilen) return { tur: 'tamam', token: depo.token }
+      const kilit = Number(await io.depoOku(KURTARMA_KILIDI))
+      if (Number.isFinite(kilit) && Date.now() - kilit < KURTARMA_KILIT_MS) return { tur: 'belirsiz' }
+      await io.depoYaz(KURTARMA_KILIDI, Date.now())
+      const y = await sureli(io, AG_BUTCESI_MS, io.istek(`${sunucu}/api/esleme/yenile`, {
+        method: 'POST', headers: { ...JSON_BASLIK, authorization: `Bearer ${reddedilen}` }, body: '{}',
+      }))
+      if (!y) return { tur: 'belirsiz' }
+      if (y.status === 401) return { tur: 'red' }
+      if (!y.ok) return { tur: 'belirsiz' }
+      const v = JSON.parse(y.text) as { ok?: boolean; token?: unknown }
+      const yeni = { ...depo, token: String(v.token ?? ''), yenilendi_at: new Date().toISOString() }
+      if (v.ok !== true || !baglantiGecerli(yeni) || yeni.token === reddedilen) return { tur: 'belirsiz' }
+      await io.depoYaz(BAGLANTI_ANAHTARI, yeni)
+      await baslikYaz(io, yeni)
+      return { tur: 'tamam', token: yeni.token }
+    } catch {
+      return { tur: 'belirsiz' }
+    }
+  }
+
+  // Dönüş: geçerli yeni jeton, ya da null (bağlantı silindi ya da kurtarma belirsiz kaldı; çağıran ikisinde de bu olayı bırakır). 401 dört sebepten
+  // gelir: iptal, hareketsizlik, başka pencerenin yenilemesi, kaybolan yenileme yanıtı (A3). Kazanan pencere yanıtını henüz yazmamış olabilir (kilit
+  // tam atomik değil, ㉕ E1): önce bak, yoksa bekle, yine bak; sonra sunucudan kurtarmayı dene (`kurtarmaDene`; yenileme ucunun kendi 401'inde
+  // denenmez, aynı uç az önce reddetti); ancak o zaman sil.
+  async function reddedildi(io: Io, reddedilen: string, kurtarmaDene = true): Promise<string | null> {
     const hemen = await yeniJeton(io, reddedilen)
     if (hemen) return hemen
-    await new Promise<void>((bitti) => { io.sonra(YARIS_BEKLEME_MS, bitti) })
-    const sonra = await yeniJeton(io, reddedilen)
-    if (sonra) return sonra
+    // Belirsiz kalan jetonda her olay yeniden 3 sn beklemez: yarış beklemesi jeton başına bir kez.
+    const bekleyen = belirsiz?.token === reddedilen ? belirsiz : null
+    if (!bekleyen) {
+      await new Promise<void>((bitti) => { io.sonra(YARIS_BEKLEME_MS, bitti) })
+      const sonra = await yeniJeton(io, reddedilen)
+      if (sonra) return sonra
+    }
+    if (kurtarmaDene) {
+      const k = await kurtar(io, reddedilen)
+      if (k.tur === 'tamam') { belirsiz = null; return k.token }
+      if (k.tur === 'belirsiz') {
+        // Sunucunun tanıma süresi kadar beklenir; o süre dolduysa kurtarma artık geçmez, bağlantı silinir.
+        const ilk = bekleyen?.ilk ?? Date.now()
+        if (Date.now() - ilk < KURTARMA_PENCERESI_MS) { belirsiz = { token: reddedilen, ilk }; return null }
+      }
+    }
+    belirsiz = null
+    // Kurtarma sürerken (≤ 6 sn) başka pencere geçerli bir jeton yazmış olabilir: silmeden önce son kez bak (tarama 10 Kas bulgu 3).
+    const sonBakis = await yeniJeton(io, reddedilen)
+    if (sonBakis) return sonBakis
     await io.depoSil(BAGLANTI_ANAHTARI)
     await baslikYaz(io, null)
     kopmaDuyur = true
@@ -211,13 +265,16 @@ export function eslemeKur(sunucu: string) {
     try {
       const kilit = Number(await io.depoOku(YENILEME_KILIDI))
       if (Number.isFinite(kilit) && Date.now() - kilit < 120_000) return
+      // Başka pencere aynı jetonu kurtarıyorsa araya ikinci bir döndürme sokma (tarama 10 Kas bulgu 3).
+      const kurtarma = Number(await io.depoOku(KURTARMA_KILIDI))
+      if (Number.isFinite(kurtarma) && Date.now() - kurtarma < KURTARMA_KILIT_MS) return
       await io.depoYaz(YENILEME_KILIDI, Date.now())
       const y = await sureli(io, AG_BUTCESI_MS, io.istek(`${sunucu}/api/esleme/yenile`, {
         method: 'POST', headers: { ...JSON_BASLIK, authorization: `Bearer ${k.token}` }, body: '{}',
       }))
       if (!y) return
       if (y.status === 401) {
-        await reddedildi(io, k.token)
+        await reddedildi(io, k.token, false)
         return
       }
       if (!y.ok) return
@@ -290,7 +347,7 @@ export function eslemeKur(sunucu: string) {
     },
 
     /** Sunucu jetonu reddetti (401): başka pencere yenilemediyse sil, kopmayı duyur; sonraki istem (ya da bu açılış) yeni kod ister. */
-    jetonReddedildi: reddedildi,
+    jetonReddedildi: (io: Io, reddedilen: string) => reddedildi(io, reddedilen),
 
     durdur,
   }
