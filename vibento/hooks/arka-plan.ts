@@ -12,12 +12,12 @@ import type { Io, Surec } from './io.ts'
 import type { Istek, SenkOzeti } from './senk.ts'
 import {
   ES_ZAMANLI_TAVAN, IKILI_KLASORLERI, KAPALI_BEKLEME_MS, KAPALI_DOSYASI, KIRA_YENILEME_MS, OTURUM_KLASORU, TUR_SURE_TAVANI_MS, YOKLAMA_MS, YOKLAYAN_DOSYASI,
-  KIMLIK_KAYDI, acikOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, kimlikKaydiBudama, ortamEkleri, pidCanli, pidKomutu,
+  KIMLIK_KAYDI, acikOturumlar, anaOturumlar, argumanlar, bitisGovdesi, bitisKarari, ciktiEkle, ikiliAdaylari, isGecerli, istemSec, kimlikKaydiBudama, ortamEkleri, pidCanli, pidKomutu,
   silinecekMi, silmeKomutu, sonucAyristir, transkriptAdaylari, yerelIkililer, yoklayanKarari,
 } from './arka-plan-mantik.mjs'
 import { BAGLANTI_ANAHTARI, SURUM } from './esleme-mantik.mjs'
 
-type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number; amac?: string | null; yeni_konusma?: boolean }
+type Is = { id: string; tur: string; klasor: string; dis_seans_id: string; ad: string; model: string; tur_usd: number; butce_usd: number; amac?: string | null; yeni_konusma?: boolean; ana_oturumlar?: string[] }
 type Zamanlayici = { cancel(): void }
 /** senk.ts `senkYap`: eşitlemeyi kendisi koşturur ve son ofseti döner (silme kanıtı). */
 export type SenkYap = (io: Io, token: string, dosya: unknown, disSeansId: unknown, cwd: unknown, butceMs: number) => Promise<SenkOzeti>
@@ -100,7 +100,7 @@ export function arkaPlanKur(istek: Istek, senkYap?: SenkYap) {
       if (!d.name.endsWith('.json')) continue
       try { icerikler.push(await io.dosyaOku(`${klasor}/${d.name}`)) } catch { /* okunamayan kayıt */ }
     }
-    const aday = acikOturumlar(icerikler).find((o) => o.sessionId === disSeansId)
+    const aday = acikOturumlar(icerikler).find((o) => String(o.sessionId).toLowerCase() === disSeansId.toLowerCase())
     if (!aday) return false
     const windows = (await io.sistemKlasoru()) !== null
     try {
@@ -147,6 +147,10 @@ export function arkaPlanKur(istek: Istek, senkYap?: SenkYap) {
     let bekci: Zamanlayici | null = null
     try {
       if (await acikMi(io, is.dis_seans_id)) { await kisaBitir(io, token, is.id, 'atlandi', 'acik'); return }
+      // A1c: hafif iş yeni kimlikle açılır; bölümün ana penceresi bu makinede açıksa aynı mesajı o işler → iki oturum koşmaz.
+      for (const ana of anaOturumlar(is)) {
+        if (await acikMi(io, ana)) { await kisaBitir(io, token, is.id, 'atlandi', 'ana_acik'); return }
+      }
       const ikili = await ikiliBul(io)
       if (!ikili || !io.surec) {
         await kisaBitir(io, token, is.id, 'hata', ikili ? 'surec_yok' : 'ikili_yok')

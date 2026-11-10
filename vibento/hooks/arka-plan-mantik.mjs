@@ -56,6 +56,29 @@ const TIRE_ILE_BASLAR = /^[\s-]/;
 
 const sayi = (d, enCok) => typeof d === 'number' && Number.isFinite(d) && d > 0 && d <= enCok;
 
+/** A1c: hafif işle gelen ana konuşma kimliklerinin tavanı (sunucudaki `ANA_OTURUM_TAVANI` ile aynı). */
+export const ANA_OTURUM_TAVANI = 5;
+
+/**
+ * A1c: hafif işte sunucunun verdiği ana konuşma kimlikleri (bölümün bu bağlantıdaki kapanmamış asıl konuşmaları). Yalnız `tur === 'hafif'`,
+ * yalnız UUID biçimli, işin kendi kimliği hariç, tekil, en çok `ANA_OTURUM_TAVANI`. Alan yoksa ya da biçimsizse boş: iş bugünkü gibi koşar.
+ * Biri makinede açıksa eklenti işi `atlandi` (`ana_acik`) bitirir: aynı mesajı açık pencere işler, iki oturum aynı işi yapmaz.
+ * @param {unknown} is
+ * @returns {string[]}
+ */
+export function anaOturumlar(is) {
+  if (!is || typeof is !== 'object' || is.tur !== 'hafif' || !Array.isArray(is.ana_oturumlar)) return [];
+  const gorulen = new Set();
+  for (const d of is.ana_oturumlar) {
+    if (typeof d !== 'string' || !UUID.test(d)) continue;
+    const k = d.toLowerCase();
+    if (k === String(is.dis_seans_id).toLowerCase()) continue;
+    gorulen.add(k);
+    if (gorulen.size >= ANA_OTURUM_TAVANI) break;
+  }
+  return [...gorulen];
+}
+
 /** Sunucudan gelen iş biçimce geçerli mi (içerik yok; görev mesajda). Tire ya da boşlukla başlayan ad ve klasör reddedilir. */
 export function isGecerli(is) {
   if (!is || typeof is !== 'object') return false;
