@@ -249,15 +249,24 @@ export const register: Register = (on, options) => {
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
+      surec: (argv, cwd, env) => $.process.spawn({ argv, cwd, env }) as unknown as Surec,
+      ortam: async (ad) => (ad === 'CLAUDE_CODE_EXECPATH' ? $.env.get('CLAUDE_CODE_EXECPATH') : ad === 'VIBENTO_ARKA_PLAN' ? $.env.get('VIBENTO_ARKA_PLAN') : null),
+      durum: (t) => $.ui.status(t),
     }
     try {
       const bagli = await esleme.baglantiOku(io)
       if (!bagli) return r
       const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>)
       if (y === 'reddedildi') return r
+      // Kanca yanıtı raftaki sürümü taşır: satır tur bitince de tazelenir (yeniden yüklenen pencere ilk turunda "güncel"i görür).
+      await surumGoster(io, rafSurum)
       // Sohbet kaydı arka planda (tur beklemez); aynı dosyada ikinci eşitleme başlamaz (senk.ts).
       // Pencere boşa düştü: uyandırma yoklaması başlar (Realtime yerine; mod ortamında WebSocket yok).
       uyandirma.basla(io, k.token, e.session_id)
+      // 0.1.25 (10 Kas ölçümü): `/reload-plugins` modülü baştan kurar ama SessionStart üretmez; arka plan yoklaması yalnız açılışta başladığı için
+      // yeniden yüklenen pencere iş sormuyor, sürümünü de bildirmiyordu. `basla` tek seferliktir (zaten çalışıyorsa bir şey yapmaz), arka plan
+      // oturumunun kendisinde başlamaz.
+      void arkaPlan.basla(io, k.token, e.session_id)
       void senk.senkYap(io, k.token, e.transcript_path, e.session_id, e.cwd, 20_000)
         .then(() => altAjanEsitle(io, istek, k.token, e.transcript_path, e.session_id, 15_000))
       // Düğme yalnız son yanıtın sorusunda (kart-mantik dugmeIzni).
