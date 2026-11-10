@@ -29,6 +29,8 @@ export type Io = {
   mcpBagla(): Promise<void>
   /** Arka plan pencereler (arka-plan.ts): kabuksuz süreç, çıktısı parça parça, sonu çıkış kodu. Kurulmadığı kancada yok. */
   surec?(argv: string[], cwd: string, env: Record<string, string>): Surec
+  /** İstem kutusunun altındaki eklenti satırı (sürüm; surum-mantik.mjs). Kurulmadığı kancada yok. */
+  durum?(metin: string): void
   /** Ortam değişkeni (ikili dosyanın yolu, arka plan işareti). */
   ortam?(ad: string): Promise<string | null | undefined>
 }

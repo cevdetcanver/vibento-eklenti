@@ -8,7 +8,8 @@
 
 import type { Register } from 'claude-code'
 import type { Io } from './io.ts'
-import { sunucuAdresi } from './esleme-mantik.mjs'
+import { SURUM, sunucuAdresi } from './esleme-mantik.mjs'
+import { KURULU_KAYDI, kuruluSurumOku, surumGecerli, surumSatiri } from './surum-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
 import { KART_DEPO_ANAHTARI, acikSoruGuncelle, kartDurumu, kartPencereOku, kartPlani, sonKartlarOku } from './kart-mantik.mjs'
 import { kartKaydet } from './kart.tsx'
@@ -41,6 +42,17 @@ const kartDurumuYaz = async (io: Io, govde: unknown, baglantiId: string | undefi
 const bagla = (r: { additionalContext?: string[] }, satir: string | null) =>
   satir ? { ...r, additionalContext: [...(r.additionalContext ?? []), satir] } : r
 
+// Sürüm satırı (0.1.24): çalışan / kurulu / raftaki sürüm istem kutusunun altında. Görünümdür: konuşmaya girmez, hata turu bozmaz.
+const surumGoster = async (io: Io, raf: string | null) => {
+  try {
+    if (!io.durum) return
+    const ev = await io.evKlasoru()
+    const a = ev?.includes('\\') ? '\\' : '/'
+    const kurulu = ev ? kuruluSurumOku(await io.dosyaOku(`${ev}${a}${KURULU_KAYDI.split('/').join(a)}`).catch(() => null)) : null
+    io.durum(surumSatiri({ calisan: SURUM, kurulu, raf }))
+  } catch { /* görünüm */ }
+}
+
 export const register: Register = (on, options) => {
   kartKaydet(on)
   const sunucu = sunucuAdresi(options.sunucu)
@@ -53,9 +65,12 @@ export const register: Register = (on, options) => {
   // Arka plan pencereler (sözleşme arka-plan-pencere §4): açık pencere sunucudan iş alır, kapalı konuşmayı görünür pencere açmadan sürdürür.
   const arkaPlan = arkaPlanKur(istek, senk.senkYap)
   // Anahtar reddedildi: başka pencere yenilediyse olay yeni anahtarla bir kez yeniden gider, pencere boşa düşmez (tarama Ek 9 O3); değilse bağlantı silinir.
+  // Sunucunun bildirdiği son yayın (kanca yanıtı `eklenti_son_surum`); bilinmeden satır yalnız çalışan sürümü yazar.
+  let rafSurum: string | null = null
   const ilet = async (io: Io, k: Baglanti, olay: Record<string, unknown>, ek?: Record<string, unknown>) => {
     const y = await olaylar.ilet(io, k, olay, ek)
     if (y !== 'reddedildi') {
+      if (surumGecerli(y.govde?.eklenti_son_surum)) rafSurum = y.govde.eklenti_son_surum
       await kartDurumuYaz(io, y.govde, k.baglanti_id)
       return { y, k }
     }
@@ -104,13 +119,16 @@ export const register: Register = (on, options) => {
       surec: (argv, cwd, env) => $.process.spawn({ argv, cwd, env }) as unknown as Surec,
       // Motor kuralı: `$.env.get` sabit ad ister; arka planın okuduğu iki ad burada sayılır.
       ortam: async (ad) => (ad === 'CLAUDE_CODE_EXECPATH' ? $.env.get('CLAUDE_CODE_EXECPATH') : ad === 'VIBENTO_ARKA_PLAN' ? $.env.get('VIBENTO_ARKA_PLAN') : null),
+      durum: (t) => $.ui.status(t),
     }
+    await surumGoster(io, rafSurum)
     try {
       const kod = await esleme.acilis(io)
       if (kod) return bagla(r, kod)
       const bagli = await esleme.baglantiOku(io)
       if (!bagli) return r
       const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>)
+      await surumGoster(io, rafSurum)
       // Anahtar reddedildi: pencere sessizce kopmasın, kod bu açılışta gelsin (eskiden ikinci bir konuşma gerekiyordu; 2 Kas ölçüldü).
       if (y === 'reddedildi') return bagla(r, await esleme.istem(io))
       const { baglam, oturumAdi } = acilisCiktisi(e as unknown as Record<string, unknown>, y.govde)
@@ -149,7 +167,10 @@ export const register: Register = (on, options) => {
       dosyaYaz: (y, m) => $.fs.write(y, m),
       dosyaOku: async (y) => String(await $.fs.read(y)),
       mcpBagla: async () => { await $.mcp.connect('vibento') },
+      durum: (t) => $.ui.status(t),
     }
+    // Her istemde: güncelleme bu arada indiyse satır "yeniden yükle" der (tek küçük dosya okuması).
+    await surumGoster(io, rafSurum)
     // Yeni istem: eski kartın düğmesi kalkar (görünüm; hata turu bozmaz).
     try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
     try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }

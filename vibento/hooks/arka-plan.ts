@@ -223,9 +223,12 @@ export function arkaPlanKur(istek: Istek, senkYap?: SenkYap) {
       if (!karar.yokla) return
       if (karar.yaz) { try { await io.dosyaYaz(yol, JSON.stringify({ oturum, at: new Date(simdi).toISOString(), surum: SURUM })) } catch { /* yazılamazsa yine yoklar */ } }
       if (kosanlar.size >= ES_ZAMANLI_TAVAN) return
-      const y = await istek(io, await jeton(io, token), '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum, turler: ['yeni', 'devam', 'hafif'] }, 8_000)
+      // A4 (0.1.24): yoklayan sürümünü bildirir; sunucu bu bilgisayarda gördüğü en yüksek sürümden düşük olana iş vermez (`neden: eski_surum`).
+      const y = await istek(io, await jeton(io, token), '/api/pencere-isi/yokla', 'POST', { dis_seans_id: oturum, turler: ['yeni', 'devam', 'hafif'], eklenti_surum: SURUM }, 8_000)
       if (!y.ok || y.govde?.ok !== true) return
       if (y.govde.acik === false) { kapaliyaKadar = simdi + KAPALI_BEKLEME_MS; return }
+      // Bu pencere eski sürümle çalışıyor: yeniden yüklenene kadar iş alamaz, boşuna sormaz (yeniden yükleme modülü baştan kurar, bekleme sıfırlanır).
+      if (y.govde.neden === 'eski_surum') { kapaliyaKadar = simdi + KAPALI_BEKLEME_MS; return }
       const is = y.govde.is
       if (!isGecerli(is)) {
         // Alınmış iş kilitli kalmasın (tarama 2 O-6): hemen hata ile kapat; kimlik bile yoksa sessiz.
