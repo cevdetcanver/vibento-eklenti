@@ -15,7 +15,9 @@ import { KART_DEPO_ANAHTARI, acikSoruGuncelle, kartDurumu, kartPencereOku, kartP
 import { kartKaydet } from './kart.tsx'
 import { atom, read, update } from 'claude-code'
 import { kapiAnahtari, kapiHazirla, kapiKarari, onayKarariAyikla, onayKarariMesaji, mesajGecerli } from './kapi-mantik.mjs'
-import { aracKimligiGirdisi, izinVerilirMi, vibentoAracAdi } from './kimlik-mantik.mjs'
+import { aracKimligiGirdisi, izinVerilirMi, vibentoAracAdi, turAnahtari, turKimligiGecerli, kanitAnahtari, kanitSurumuOku } from './kimlik-mantik.mjs'
+import { adKaydiKur, adKaydiOku, adListesiAnahtari, adListesiIstenirMi, sozAlanlari } from './ad-mantik.mjs'
+import { durumSatiri, vekaletBitisAl, vekaletParcasi } from './vekalet-mantik.mjs'
 import { eslemeKur, type Baglanti } from './esleme.ts'
 import { olayKur } from './olay.ts'
 import { senkKur, istekYap, type Istek } from './senk.ts'
@@ -42,14 +44,53 @@ const kartDurumuYaz = async (io: Io, govde: unknown, baglantiId: string | undefi
 const bagla = (r: { additionalContext?: string[] }, satir: string | null) =>
   satir ? { ...r, additionalContext: [...(r.additionalContext ?? []), satir] } : r
 
+// 0.1.26 (D2b): sunucunun yanıtındaki ad listesi (klasörün öbür pencereleri) oturum başına depoya yazılır; istem metni bununla YERELDE
+// eşleştirilir. Yanıtta liste yoksa eski kayıt kalır. Hata turu bozmaz: liste yoksa söz hiçbir pencereye yetmez, onaya düşer.
+// YALNIZ eklentinin istediği yanıttan çağrılır (güvenlik taraması 13 Kas B3): sunucu istenmeyen bir yanıta liste koyarak her istemden
+// önce yeni bir yoklama listesi yerleştiremesin; liste en çok açılışta ve 10 dakikada bir değişir.
+const adListesiniKaydet = async (io: Io, seansId: unknown, govde: Record<string, unknown> | null | undefined) => {
+  try {
+    const anahtar = adListesiAnahtari(seansId)
+    const kayit = anahtar ? adKaydiKur(govde?.ad_listesi, await io.simdi()) : null
+    if (anahtar && kayit) await io.depoYaz(anahtar, kayit)
+  } catch { /* liste yazılamazsa bir sonraki istekte yeniden istenir */ }
+}
+
+// 0.1.26 (D2b; güvenlik taraması 13 Kas B11): sunucu tur kimlikli kanıtı (`k2`) tanıdığını her yanıtta söyler (`kanit_surumu: 2`).
+// Eklenti `k2`'yi ancak bu oturumun SON yanıtında bunu gördüyse yazar: sunucu geri alınırsa (eski sunucu `k2`'yi bozuk sayar ve bütün
+// kimlik araçlarını reddeder) bir sonraki yanıtla eski biçime (`k1`) döner. Yanıt gelmediyse (ağ hatası) son bilinen değer kalır.
+const kanitSurumuKaydet = async (io: Io, seansId: unknown, govde: Record<string, unknown> | null | undefined) => {
+  try {
+    const anahtar = kanitAnahtari(seansId)
+    const surum = kanitSurumuOku(govde)
+    if (!anahtar || surum === null) return
+    if (surum === 2) await io.depoYaz(anahtar, 2)
+    else await io.depoSil(anahtar)
+  } catch { /* yazılamazsa eski biçim yazılır: sunucu bugünkü ölçüyle karar verir */ }
+}
+
+// 0.1.26 (D2b): turun kimliği. İstemde o istemin olay kimliği yazılır; tur bitince sunucunun BİLMEDİĞİ yeni bir kimlik yazılır: istemsiz
+// başlayan bir turun (görev bildirimi, alt ajan dönüşü) araç çağrıları bir önceki turun, yani kullanıcının sözünün kimliğini taşımasın.
+const turKimligiYaz = async (io: Io, seansId: unknown, kimlik: string) => {
+  try {
+    const anahtar = turAnahtari(seansId)
+    if (anahtar) await io.depoYaz(anahtar, kimlik)
+  } catch { /* yazılamazsa çağrı eski kimlikle ya da kimliksiz gider; sunucu sıkı yönde karar verir */ }
+}
+
 // Sürüm satırı (0.1.24): çalışan / kurulu / raftaki sürüm istem kutusunun altında. Görünümdür: konuşmaya girmez, hata turu bozmaz.
-const surumGoster = async (io: Io, raf: string | null) => {
+// 0.1.26 (D2d madde 4): satırın sonunda Vekâlet göstergesi (`vekalet-mantik.mjs`); her çizimde saate göre yeniden kurulur, süresi dolan
+// parça kendiliğinden düşer. Değer yalnız ekrana gider: bağlama, gövdeye ve karara girmez.
+const surumGoster = async (io: Io, raf: string | null, vekalet: string | null) => {
   try {
     if (!io.durum) return
     const ev = await io.evKlasoru()
     const a = ev?.includes('\\') ? '\\' : '/'
     const kurulu = ev ? kuruluSurumOku(await io.dosyaOku(`${ev}${a}${KURULU_KAYDI.split('/').join(a)}`).catch(() => null)) : null
-    io.durum(surumSatiri({ calisan: SURUM, kurulu, raf }))
+    // Saat okunamazsa parça düşer, sürüm satırı yine çizilir.
+    let simdi = Number.NaN
+    try { simdi = await io.simdi() } catch { /* görünüm */ }
+    io.durum(durumSatiri(surumSatiri({ calisan: SURUM, kurulu, raf }), vekaletParcasi(vekalet, simdi)))
   } catch { /* görünüm */ }
 }
 
@@ -67,6 +108,15 @@ export const register: Register = (on, options) => {
   // Anahtar reddedildi: başka pencere yenilediyse olay yeni anahtarla bir kez yeniden gider, pencere boşa düşmez (tarama Ek 9 O3); değilse bağlantı silinir.
   // Sunucunun bildirdiği son yayın (kanca yanıtı `eklenti_son_surum`); bilinmeden satır yalnız çalışan sürümü yazar.
   let rafSurum: string | null = null
+  // 0.1.26 (D2d madde 4): son bilinen Vekâlet bitişi (yalnız gösterge). YALNIZ `vekalet_iste` taşıyan isteğin yanıtından güncellenir:
+  // alan varsa değer (null siler), alan yoksa (ağ hatası, eski sunucu) son değer kalır ve süresi dolunca satırdan kendiliğinden düşer.
+  let vekaletBitis: string | null = null
+  const vekaletKaydet = (govde: unknown) => {
+    try {
+      const v = vekaletBitisAl(govde)
+      if (v.var) vekaletBitis = v.bitis
+    } catch { /* görünüm */ }
+  }
   const ilet = async (io: Io, k: Baglanti, olay: Record<string, unknown>, ek?: Record<string, unknown>) => {
     const y = await olaylar.ilet(io, k, olay, ek)
     if (y !== 'reddedildi') {
@@ -95,9 +145,16 @@ export const register: Register = (on, options) => {
     return r
   })
 
-  on('turn.complete', async (_$, e, next) => {
+  on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId === undefined && e.reason !== 'answer') uyandirma.turBitti()
+    // Tur bitti: sıradaki tur kendi istemini getirmezse araç çağrıları bu turun (kullanıcının sözünün) kimliğini taşımaz.
+    if (e.agentId === undefined) {
+      try {
+        const anahtar = turAnahtari(await $.session.id())
+        if (anahtar) await $.store.set(anahtar, crypto.randomUUID())
+      } catch { /* kimlik yazılamazsa sunucu sıkı yönde karar verir */ }
+    }
     return r
   })
 
@@ -121,16 +178,25 @@ export const register: Register = (on, options) => {
       ortam: async (ad) => (ad === 'CLAUDE_CODE_EXECPATH' ? $.env.get('CLAUDE_CODE_EXECPATH') : ad === 'VIBENTO_ARKA_PLAN' ? $.env.get('VIBENTO_ARKA_PLAN') : null),
       durum: (t) => $.ui.status(t),
     }
-    await surumGoster(io, rafSurum)
+    // Yeni oturum (açılış, sürdürme, temizleme, daraltma): önceki oturumun Vekâlet değeri bu oturum için BİLİNMİYOR, satırdan düşer
+    // (D2d güvenlik taraması, bilgi notu: eşlemesi olmayan ya da anahtarı reddedilen pencerede eski "Vekâlet açık" yazısı kalıyordu).
+    // Sunucu yanıtlarsa aşağıda yeniden yazılır.
+    vekaletBitis = null
+    await surumGoster(io, rafSurum, vekaletBitis)
     try {
       const kod = await esleme.acilis(io)
       if (kod) return bagla(r, kod)
       const bagli = await esleme.baglantiOku(io)
       if (!bagli) return r
-      const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>)
-      await surumGoster(io, rafSurum)
+      // 0.1.26 (D2b): açılışta ad listesi her zaman istenir (klasörün öbür pencereleri; istem metni bununla yerelde eşleştirilir).
+      // 0.1.26 (D2d madde 4): Vekâlet göstergesinin bitişi de her açılışta istenir; yanıt yalnız satıra gider.
+      const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>, { ad_listesi_iste: true, vekalet_iste: true })
+      if (y !== 'reddedildi') vekaletKaydet(y.govde)
+      await surumGoster(io, rafSurum, vekaletBitis)
       // Anahtar reddedildi: pencere sessizce kopmasın, kod bu açılışta gelsin (eskiden ikinci bir konuşma gerekiyordu; 2 Kas ölçüldü).
       if (y === 'reddedildi') return bagla(r, await esleme.istem(io))
+      await adListesiniKaydet(io, e.session_id, y.govde)
+      await kanitSurumuKaydet(io, e.session_id, y.govde)
       const { baglam, oturumAdi } = acilisCiktisi(e as unknown as Record<string, unknown>, y.govde)
       // Kapanış kartının başlığı: bu oturumun kimliği. Sunucu yalnız çoklu çalışmada gönderir; görünümdür, hata açılışı bozmaz.
       try {
@@ -170,7 +236,7 @@ export const register: Register = (on, options) => {
       durum: (t) => $.ui.status(t),
     }
     // Her istemde: güncelleme bu arada indiyse satır "yeniden yükle" der (tek küçük dosya okuması).
-    await surumGoster(io, rafSurum)
+    await surumGoster(io, rafSurum, vekaletBitis)
     // Yeni istem: eski kartın düğmesi kalkar (görünüm; hata turu bozmaz).
     try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
     try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }
@@ -191,8 +257,28 @@ export const register: Register = (on, options) => {
       if (hazir.onay) ek.kapi_onay = hazir.onay
       const karar = istemSinifi(e.prompt) === 'insan' ? onayKarariAyikla(ideBaglamiSoy(e.prompt)) : null
       if (karar) ek.onay_karari = karar
+      // 0.1.26 (D2b; sözleşme docs/sozlesme-unvanlar.md Ek D2): kullanıcının sözünde ADI GEÇEN pencereler. Eşleştirme burada, yerelde;
+      // gövdeye yalnız bölüm kimlikleri ve toplu söz işareti girer, metin girmez (değişmez 4). Yalnız insan isteminde: uyanan tur, arka plan
+      // ve görev bildirimi söz değildir. Liste yoksa `anilanlar` boş gider (söz hiçbir pencereye yetmez, onaya düşer).
+      const adAnahtar = adListesiAnahtari(e.session_id)
+      const adKaydi = adAnahtar ? adKaydiOku(await io.depoOku(adAnahtar)) : null
+      if (istemSinifi(e.prompt) === 'insan') Object.assign(ek, sozAlanlari(e.prompt, adKaydi?.liste ?? null))
+      if (adListesiIstenirMi(adKaydi, await io.simdi())) ek.ad_listesi_iste = true
+      // 0.1.26 (D2d madde 4): Vekâlet göstergesinin bitişi her istemde istenir (tur başında satır tazelenir; konuşmaya girmez).
+      ek.vekalet_iste = true
+      // Turun kimliği = bu istemin olay kimliği (her istem türünde): araç çağrıları kanıtında taşır (kimlik-mantik.mjs `k2`). İletimden ÖNCE
+      // yazılır: istem sunucuya ulaşmasa da bu turun çağrıları bu kimliği taşır ve sunucu "istem ulaşmadı" diye sözü saymaz.
+      const turKimligi = crypto.randomUUID()
+      ek.olay_kimligi = turKimligi
+      await turKimligiYaz(io, e.session_id, turKimligi)
       const { y } = await ilet(io, k, e as unknown as Record<string, unknown>, ek)
       if (y === 'reddedildi') return bagla(r, (await esleme.istem(io)) ?? not)
+      // Liste yalnız BU istekte istendiyse kabul edilir (istenmeyen yanıttaki liste yok sayılır).
+      if (ek.ad_listesi_iste === true) await adListesiniKaydet(io, e.session_id, y.govde)
+      await kanitSurumuKaydet(io, e.session_id, y.govde)
+      // Vekâlet bitişi de yalnız BU istekte istendiyse alınır; satır yanıttan sonra yeniden çizilir (görünüm, hata turu bozmaz).
+      if (ek.vekalet_iste === true) vekaletKaydet(y.govde)
+      await surumGoster(io, rafSurum, vekaletBitis)
       // Öncelik: ad kapısı > onay kararı > pencere mesajı; o turda tek çıktı (değişmez 2, 10, 13). Her hata: durdurma yok.
       const kapi = kapiKarari(hazir, y.govde, e.prompt)
       const adim = kapi.yerel
@@ -222,7 +308,14 @@ export const register: Register = (on, options) => {
       const { tool: _arac, tool_use_id: _kimlik, agentId: _ajan, ...girdi } = e as unknown as Record<string, unknown>
       const k = await $.store.get('vibento.baglanti') as { token?: unknown } | undefined
       const jeton = typeof k?.token === 'string' ? k.token : null
-      const yeni = await aracKimligiGirdisi(e.tool, await $.session.id(), girdi, jeton)
+      // 0.1.26 (D2b): turun kimliği depodan OKUNUR (yazım yok; değişmez 14) ve kanıta girer.
+      const oturum = await $.session.id()
+      const tAnahtar = turAnahtari(oturum)
+      const tur = tAnahtar ? await $.store.get(tAnahtar) : null
+      // Tur kimlikli kanıt yalnız sunucu onu tanıdığını bu oturumun son yanıtında söylediyse yazılır; değilse eski biçim.
+      const kAnahtar = kanitAnahtari(oturum)
+      const sunucuTanir = kAnahtar ? (await $.store.get(kAnahtar)) === 2 : false
+      const yeni = await aracKimligiGirdisi(e.tool, oturum, girdi, jeton, sunucuTanir && turKimligiGecerli(tur) ? tur : null)
       const sonuc = yeni ? { ...r, updatedInput: yeni } : r
       // Altta karar yoksa eklentinin kendi araçları izin sormaz (kimlik-mantik.mjs izinVerilirMi); değişmez 14'ün eklentideki tek eki.
       if (izinVerilirMi(e.tool) && !r.allow && !r.ask && !r.deny) {
@@ -259,7 +352,8 @@ export const register: Register = (on, options) => {
       const { y, k } = await ilet(io, bagli, e as unknown as Record<string, unknown>)
       if (y === 'reddedildi') return r
       // Kanca yanıtı raftaki sürümü taşır: satır tur bitince de tazelenir (yeniden yüklenen pencere ilk turunda "güncel"i görür).
-      await surumGoster(io, rafSurum)
+      // Vekâlet parçası burada yalnız son bilinen değerle yeniden çizilir (Stop yanıtından değer alınmaz; süresi dolduysa düşer).
+      await surumGoster(io, rafSurum, vekaletBitis)
       // Sohbet kaydı arka planda (tur beklemez); aynı dosyada ikinci eşitleme başlamaz (senk.ts).
       // Pencere boşa düştü: uyandırma yoklaması başlar (Realtime yerine; mod ortamında WebSocket yok).
       uyandirma.basla(io, k.token, e.session_id)
@@ -350,6 +444,11 @@ export const register: Register = (on, options) => {
       // Değişmez 10: ad kapısının yerel adımı oturum kapanınca silinir.
       const kAnahtar = kapiAnahtari(e.session_id)
       if (kAnahtar) await io.depoSil(kAnahtar)
+      // 0.1.26 (güvenlik taraması 13 Kas B8): oturumun ad listesi, tur kimliği ve kanıt sürümü kaydı da silinir (depo büyümesin; devam
+      // eden oturum açılışta listeyi ve sürümü yeniden alır, tur kimliğini ilk istem yazar).
+      for (const anahtar of [adListesiAnahtari(e.session_id), turAnahtari(e.session_id), kanitAnahtari(e.session_id)]) {
+        if (anahtar) await io.depoSil(anahtar).catch(() => {})
+      }
       const k = await esleme.baglantiOku(io)
       // Kapanışta kısa bütçe (bugünkü kanca 1 sn): kalan, bir sonraki açılışın Stop'unda sunucunun ofsetinden sürer. Anahtar reddedildiyse iş de
       // sonraki açılışa kalır: kapanan pencereyi bekletmeye değmez, kopma duyurusunu görecek kimse yok.

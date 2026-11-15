@@ -7,6 +7,7 @@
 // =====================================================================
 
 import { SURUM } from './esleme-mantik.mjs';
+import { etiketliKomutMu } from './ad-mantik.mjs';
 
 // Eklenti bugünkü kancanın 24. sürümüyle aynı özellik sözleşmesini taşır (sunucu özellikleri sayısal sürümle açar: ≥14 pencere mesajı,
 // ≥16 uyandırma alanı, ≥20 istem öneki, ≥22 onay kararı). Bütün dilimler bitmeden eklenti dağıtılmaz.
@@ -41,6 +42,10 @@ const ISTEM_ONEK_BILINEN = [
   'command-name', 'command-args', 'local-command-stdout', 'local-command-stderr',
   'local-command-caveat', 'scheduled-task', 'system-reminder', 'user-prompt-submit-hook',
   'bash-input', 'bash-stdout', 'bash-stderr',
+  // 0.1.26 (D2d madde 5; sözleşme docs/sozlesme-unvanlar.md Ek D2d): yalnız ÖLÇÜM adları, eklentiye özgü. Yalnız AD gider (içerik değil);
+  // sunucu bunlarla karar vermez (`task-notification` dışındaki her önek "kaynağı bilinmeyen" sınıfta kalır). Eski kancanın listesi
+  // (src/server/kanca/02-kapi-onay-mesaj.mjs) DEĞİŞMEZ: kancaya gömülen dosyadır; bu üç ad yalnız eklentide (bilinçli fark).
+  'cross-session-message', 'artifact-content-authored-by-others', 'teammate-message',
 ];
 // Gövdeye giren olaylar (bugünkü kancanın ayar satırları; PostToolUse yok).
 export const ILETILEN_OLAYLAR = ['SessionStart', 'UserPromptSubmit', 'Stop', 'PreCompact', 'SessionEnd'];
@@ -67,12 +72,26 @@ export function ideBaglamiSoy(prompt) {
   return p === 0 ? s : s.slice(p);
 }
 
-/** insan · kendiliginden · yeniden_adlandirma · arka_plan (sabit istem önekiyle; sunucu beyaz listesi `ISTEM_TURLERI`). */
+/**
+ * insan · kendiliginden · yeniden_adlandirma · arka_plan (sabit istem önekiyle; sunucu beyaz listesi `ISTEM_TURLERI`).
+ * 0.1.26 (D2b; ürün sahibinin 13 Kas kararı: eğik çizgili komutla başlayan tur kullanıcının sözü sayılır): yalın `/komut` biçimi
+ * `insan`dır (öteden beri); sözde anılan adlar komut adından sonraki metinden alınır (`ad-mantik.mjs` `sozMetni`).
+ * ETİKETLİ biçim (`<command-message>` / `<command-name>` ile başlayan istem) `ETIKETLI_KOMUT_SOZ` açılana kadar `kendiliginden` kalır.
+ */
+/**
+ * Etiketli komut biçimi söz sayılsın mı. KAPALI (güvenlik taraması 13 Kas B4): bu biçim canlıda 14 günde hiç görülmedi, yani kullanıcının
+ * yazdığı komutun kancaya bu biçimde geldiği ölçülmedi; modelin çağırdığı bir beceri, döngü ya da zamanlanmış komut bu biçimde gelirse
+ * modelin yazdığı argüman "kullanıcının sözü" olurdu. Açmanın şartı: kullanıcı eğik çizgili komut yazdığında kayıttaki biçim okunur ve
+ * bu biçimin YALNIZ kullanıcının yazdığı komutta geldiği gösterilir (sözleşme unvanlar Ek D2; koşullu hatırlatma).
+ */
+export const ETIKETLI_KOMUT_SOZ = false;
+
 export function istemTuru(prompt) {
   if (typeof prompt !== 'string') return 'kendiliginden';
   const kirpik = ideBaglamiSoy(prompt);
   if (kirpik.length === 0) return 'kendiliginden';
   if (kirpik.startsWith(ARKA_PLAN_ONEKI)) return 'arka_plan';
+  if (ETIKETLI_KOMUT_SOZ && etiketliKomutMu(kirpik)) return 'insan';
   if (kirpik.charAt(0) === '<' && kirpik.indexOf('<pasted_content') !== 0) return 'kendiliginden';
   if (KAPI_YENIDEN_ADLANDIRMA.test(kirpik)) return 'yeniden_adlandirma';
   return 'insan';
@@ -144,11 +163,17 @@ export function govdeKur(olay, ek) {
   return govde;
 }
 
-/** Kuyruğa giren kopya (01-bas.mjs kuyrugaYaz): kapı onayı, onay kararı ve UPS'in pencere adı ASLA kuyruğa girmez. */
+/**
+ * Kuyruğa giren kopya (01-bas.mjs kuyrugaYaz): kapı onayı, onay kararı ve UPS'in pencere adı ASLA kuyruğa girmez. Ad listesi isteği de
+ * girmez (0.1.26): geç giden olayın yanıtı okunmaz, istek boşa okuma yaptırır. Vekâlet göstergesi isteği de aynı nedenle girmez (D2d
+ * madde 4). `anilanlar` ve `toplu_soz` kalır (yalnız kimlik ve işaret; istemin kendi kaydına aittir).
+ */
 export function kuyrukKopyasi(govde) {
   const k = { ...govde };
   delete k.kapi_onay;
   delete k.onay_karari;
+  delete k.ad_listesi_iste;
+  delete k.vekalet_iste;
   if (k.olay === 'UserPromptSubmit') delete k.pencere_adi;
   return k;
 }

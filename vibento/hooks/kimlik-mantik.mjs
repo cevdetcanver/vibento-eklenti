@@ -13,6 +13,63 @@ const ETIKET = 'vibento-kimlik-v1';
 const AYRAC = '.k1.';
 const UZUNLUK = 32;
 const OTURUM = /^[A-Za-z0-9_-]{1,128}$/;
+// 0.1.26 (D2b; sözleşme docs/sozlesme-unvanlar.md Ek D2 "D2b"): kanıt, çağrının hangi TURDA yapıldığını da taşır:
+// '<oturum>.k2.<tur kimliği>.<kanıt>'; kanıt = HMAC-SHA256(anahtar aynen, veri = "vibento-kimlik-v2\n<oturum>\n<tur kimliği>\n") hex, ilk 32.
+// Tur kimliği = o turu başlatan istem olayının `olay_kimligi`'si (eklenti üretir, istemle birlikte sunucuya gider). Sunucu böylece "bu çağrı
+// kullanıcının SON istemiyle başlayan turda mı" sorusunu kayıttan cevaplar. Tur kimliği yoksa ya da biçimsizse eski biçim (`k1`) yazılır.
+const ETIKET2 = 'vibento-kimlik-v2';
+const AYRAC2 = '.k2.';
+const TUR = /^[A-Za-z0-9_-]{8,64}$/;
+/** Turun kimliğinin depodaki anahtarı (istemde yazılır, araç çağrısında okunur); oturum kimliği biçimsizse null. */
+export function turAnahtari(seansId) {
+  if (typeof seansId !== 'string') return null;
+  const ad = seansId.replace(/[^A-Za-z0-9_-]/g, '');
+  return ad.length > 0 ? `vibento.tur.${ad}` : null;
+}
+/**
+ * Depodan okunan değer geçerli bir tur kimliği mi.
+ * @param {unknown} d
+ * @returns {d is string}
+ */
+export const turKimligiGecerli = (d) => typeof d === 'string' && TUR.test(d);
+/** "Sunucu tur kimlikli kanıtı tanıyor" kaydının depodaki anahtarı (oturum başına); oturum kimliği biçimsizse null. */
+export function kanitAnahtari(seansId) {
+  if (typeof seansId !== 'string') return null;
+  const ad = seansId.replace(/[^A-Za-z0-9_-]/g, '');
+  return ad.length > 0 ? `vibento.kanit.${ad}` : null;
+}
+// Tur kimlikli kanıtın metindeki izi: `.k2.<tur kimliği>.<32 hex>` (oturum kimliği kalır). Sınırlı tekrar: doğrusal.
+const KANIT2_IZI = /\.k2\.[A-Za-z0-9_-]{8,64}\.[0-9a-f]{32}(?![0-9a-f])/g;
+/** Süzülen kanıtın yerine yazılan işaret (günlük süzgecinin `kimlik_kaniti` işaretiyle aynı). */
+export const KANIT_ISARETI = '[GİZLİ:kimlik_kaniti]';
+/**
+ * Günlük süzgecini (`gizliSuz`: `{ metin, sayi, turler }`) tur kimlikli kanıtı da silen süzgece çevirir; dönüş biçimi aynı.
+ * Neden ayrı bir sarmal (güvenlik taraması 13 Kas B2): `gizliSuz` eski kancaya da gömülür ve o metin imzalıdır; yalnız `.k1.` kanıtını
+ * tanır. Eklenti 0.1.26 `k2` yazar: araç girdisi olarak yerel dökümde kalabilir, eşitlemeyle sunucuya ve `gunluk_ara` ile aynı
+ * bağlantının başka penceresine ulaşırdı. Tur kimliği kanıtla birlikte gider (ikisi birlikte yeniden kullanılabilir).
+ * Sunucudaki eşi: `src/server/gunluk/kanit-suzgeci.mjs` (aynı tanım; fark testi `tests/suzgec.test.mjs`).
+ * @param {(metin: string) => { metin: string, sayi: number, turler: Record<string, number> }} gizliSuz
+ */
+export function kanitliSuzgec(gizliSuz) {
+  return (metin) => {
+    const s = gizliSuz(metin);
+    let adet = 0;
+    const temiz = String(s.metin).replace(KANIT2_IZI, () => { adet += 1; return KANIT_ISARETI; });
+    if (adet === 0) return s;
+    return { metin: temiz, sayi: s.sayi + adet, turler: { ...s.turler, kimlik_kaniti: (s.turler?.kimlik_kaniti ?? 0) + adet } };
+  };
+}
+
+/**
+ * Sunucunun yanıtındaki kanıt sürümü: `2` (tur kimlikli kanıtı tanıyor) · `0` (yanıt var, alan yok ya da başka değer: tanımıyor) ·
+ * `null` (yanıt yok: bilinmiyor, son bilinen değer kalır). Sunucu geri alınırsa eklenti bir sonraki yanıtla eski biçime döner.
+ * @param {unknown} govde
+ * @returns {2 | 0 | null}
+ */
+export function kanitSurumuOku(govde) {
+  if (!govde || typeof govde !== 'object' || Array.isArray(govde)) return null;
+  return /** @type {Record<string, unknown>} */ (govde).kanit_surumu === 2 ? 2 : 0;
+}
 // Kullanıcı düzeyi MCP adı (bugünkü kurulum) ve eklentinin kendi MCP sunucusu (3g-B: `mcp__plugin_<eklenti>_<sunucu>__`).
 const ONEKLER = ['mcp__vibento__', 'mcp__plugin_vibento_vibento__'];
 
@@ -44,6 +101,15 @@ export async function kimlikKaniti(jeton, oturum) {
   return hex(imza).slice(0, UZUNLUK);
 }
 
+/** Tur kimlikli kanıt (32 küçük harf hex) ya da jeton geçersizse null. Veri oturumu VE turu bağlar: biri değişirse kanıt tutmaz. */
+export async function kimlikKaniti2(jeton, oturum, tur) {
+  if (typeof jeton !== 'string' || jeton.length === 0) return null;
+  const kodla = new TextEncoder();
+  const anahtarHex = hex(await sha256(kodla.encode(jeton)));
+  const imza = await hmacSha256(kodla.encode(anahtarHex), kodla.encode(`${ETIKET2}\n${oturum}\n${tur}\n`));
+  return hex(imza).slice(0, UZUNLUK);
+}
+
 /** Aracın Vibento adı (öneksiz) ya da null. */
 export function vibentoAracAdi(aracAdi) {
   if (typeof aracAdi !== 'string') return null;
@@ -65,9 +131,15 @@ export function izinVerilirMi(aracAdi) {
 
 /**
  * Yeni araç girdisi ya da null (dokunma). `girdi` yoksa boş nesne; nesne olmayan girdi → null. Oturum kimliği biçim dışıysa kanıtsız yazılır.
+ * `turKimligi` geçerliyse kanıt tur kimlikli biçimde (`k2`), değilse eski biçimde (`k1`) yazılır.
+ * @param {unknown} aracAdi
+ * @param {unknown} oturum
+ * @param {unknown} girdi
+ * @param {unknown} jeton
+ * @param {unknown} [turKimligi]
  * @returns {Promise<Record<string, unknown> | null>}
  */
-export async function aracKimligiGirdisi(aracAdi, oturum, girdi, jeton) {
+export async function aracKimligiGirdisi(aracAdi, oturum, girdi, jeton, turKimligi = null) {
   const ad = vibentoAracAdi(aracAdi);
   if (ad === null) return null;
   if (typeof oturum !== 'string' || oturum.trim().length === 0) return null;
@@ -79,8 +151,13 @@ export async function aracKimligiGirdisi(aracAdi, oturum, girdi, jeton) {
   let deger = oturum;
   if (OTURUM.test(oturum)) {
     try {
-      const kanit = await kimlikKaniti(jeton, oturum);
-      if (kanit !== null) deger = oturum + AYRAC + kanit;
+      if (turKimligiGecerli(turKimligi)) {
+        const kanit2 = await kimlikKaniti2(jeton, oturum, turKimligi);
+        if (kanit2 !== null) deger = oturum + AYRAC2 + turKimligi + '.' + kanit2;
+      } else {
+        const kanit = await kimlikKaniti(jeton, oturum);
+        if (kanit !== null) deger = oturum + AYRAC + kanit;
+      }
     } catch {
       deger = oturum;
     }

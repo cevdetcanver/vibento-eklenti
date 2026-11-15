@@ -13,6 +13,7 @@ import {
 } from './senk-mantik.mjs'
 import { satirlariAyristir, gizliSuz, maliyetHesapla, VIBENTO_FIYAT } from './gunluk.mjs'
 import { HOOK_SURUM, pencereAdiAl } from './olay-mantik.mjs'
+import { kanitliSuzgec } from './kimlik-mantik.mjs'
 
 type Durum = Record<string, unknown> & { son_sira?: unknown; son_mesaj_id?: unknown; arac_adlari?: unknown; yerel_mesaj?: unknown; sayac?: unknown }
 type Mesaj = Record<string, unknown> & { _ofset: number; sira: number; metin?: string; _suzulen?: number }
@@ -21,8 +22,11 @@ type Pencere = { tampon: Uint8Array; bas: number; son: number }
 
 export type SenkOzeti = { mesaj: number; parca: number; ofset: number; hata: string | null; kod: number }
 
+// 0.1.26: günlük süzgeci + tur kimlikli kimlik kanıtı (`k2`). Kanıt araç girdisi olarak yerel dökümde kalabilir; bilgisayardan çıkmaz.
+const suzgec = kanitliSuzgec(gizliSuz as (metin: string) => { metin: string; sayi: number; turler: Record<string, number> })
+
 const ayristir = (metin: string, sira: number, durum: Durum) =>
-  satirlariAyristir(metin, sira, { durum, gizliSuz, maliyetHesapla, fiyatTablosu: VIBENTO_FIYAT }) as unknown as {
+  satirlariAyristir(metin, sira, { durum, gizliSuz: suzgec, maliyetHesapla, fiyatTablosu: VIBENTO_FIYAT }) as unknown as {
     mesajlar: Mesaj[]; durum: Durum; suzulen: number; hatali: number; suzulenTurler: Record<string, number>; pencereAdi?: string
   }
 
