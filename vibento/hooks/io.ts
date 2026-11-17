@@ -7,6 +7,19 @@
 // =====================================================================
 
 export type IstekCevabi = { status: number; ok: boolean; text: string }
+/** `komut`'un üçüncü argümanı; verilmeyen (ya da null) alan `$.process.run`'a hiç geçmez. */
+export type KomutSecenegi = { girdi?: string | null; ortam?: Record<string, string> | null }
+
+/**
+ * `$.process.run`'ın seçenek nesnesi: süre ve çalışma klasörü her zaman; `stdin` ve `env` YALNIZ verildiyse (anahtar bile konmaz:
+ * öbür komutlar bugünkü seçeneklerle bayt bayt aynı koşar). Saf; `register.ts`'in beş `komut:` kurucusu bunu kullanır.
+ */
+export function komutSecenegi(zamanAsimiMs: number, cwd: string | undefined, secenek?: KomutSecenegi) {
+  const cikti: { timeoutMs: number; cwd: string | undefined; stdin?: string; env?: Record<string, string> } = { timeoutMs: zamanAsimiMs, cwd }
+  if (typeof secenek?.girdi === 'string') cikti.stdin = secenek.girdi
+  if (secenek?.ortam && typeof secenek.ortam === 'object') cikti.env = secenek.ortam
+  return cikti
+}
 export type Zamanlayici = { cancel(): void }
 
 export type Io = {
@@ -14,7 +27,11 @@ export type Io = {
   depoYaz(anahtar: string, deger: unknown): Promise<void>
   depoSil(anahtar: string): Promise<void>
   istek(adres: string, secenek: { method?: string; headers?: Record<string, string>; body?: string }): Promise<IstekCevabi>
-  komut(argv: string[], zamanAsimiMs: number): Promise<{ exitCode: number | null; stdout: string }>
+  /**
+   * Kabuksuz komut. `secenek.girdi`: standart girdiye yazılır, sonra kapatılır. `secenek.ortam`: sürecin ortamına EKLENİR (yalnız o
+   * çocuk için). İkisi de yalnız okuma komutunda kullanılır (`senk.ts` `dosyaOku`; `docs/sozlesme-okuma-komutu.md`).
+   */
+  komut(argv: string[], zamanAsimiMs: number, secenek?: KomutSecenegi): Promise<{ exitCode: number | null; stdout: string }>
   herBirde(ms: number, fn: () => void): Zamanlayici
   sonra(ms: number, fn: () => void): Zamanlayici
   bildir(metin: string): void

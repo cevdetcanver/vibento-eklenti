@@ -8,6 +8,8 @@
 
 import type { Register } from 'claude-code'
 import type { Io } from './io.ts'
+// 0.1.27 (`docs/sozlesme-okuma-komutu.md`): `komut` üçüncü argümanla standart girdi ve ortam taşır (yalnız okuma komutu kullanır).
+import { komutSecenegi } from './io.ts'
 import { SURUM, sunucuAdresi } from './esleme-mantik.mjs'
 import { KURULU_KAYDI, kuruluSurumOku, surumGecerli, surumSatiri } from './surum-mantik.mjs'
 import { acilisCiktisi, pencereMesajiMetni, istemSinifi, ideBaglamiSoy } from './olay-mantik.mjs'
@@ -162,7 +164,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms, s) => $.process.run(a, komutSecenegi(ms, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined, s)),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -222,7 +224,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms, s) => $.process.run(a, komutSecenegi(ms, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined, s)),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -331,7 +333,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms, s) => $.process.run(a, komutSecenegi(ms, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined, s)),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -399,7 +401,7 @@ export const register: Register = (on, options) => {
     const r = await next(e)
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms, s) => $.process.run(a, komutSecenegi(ms, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined, s)),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
@@ -428,7 +430,7 @@ export const register: Register = (on, options) => {
     arkaPlan.durdur()
     const io: Io = {
       depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
-      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms) => $.process.run(a, { timeoutMs: ms, cwd: (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined }),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms, s) => $.process.run(a, komutSecenegi(ms, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined, s)),
       herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
       simdi: () => $.clock.now(),
       dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },

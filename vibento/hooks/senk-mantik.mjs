@@ -3,8 +3,10 @@
 //
 // Kaynak: bugünkü kanca `src/server/kanca/04-senkron.mjs` (senkParcalaraBol, parcaDurumlariKur, senkGovdesiTemizle, pencere kesimi).
 // Fark: mod ortamında Node yok ve `$.fs.read` dosyanın tamamını okur (4 MiB tavanı, aralıklı okuma yok) → dosya penceresi işletim sisteminin
-// kendi aracıyla okunur (Windows PowerShell, Mac/Linux `tail | head`), çıktı base64. Komut kurucuları burada; argümanlar doğrulanır, yol
-// komut metnine yalnız tek tırnak kaçışıyla girer (Windows) ya da konumsal argümandır (sh).
+// kendi aracıyla okunur (Windows PowerShell, Mac/Linux `tail | head`), çıktı base64. Komut kurucuları burada; argümanlar doğrulanır. Yol
+// komut metnine ve betiğe HİÇ girmez: Windows'ta ortam değişkeninin değeridir, sh'te konumsal argümandır.
+// 0.1.27 (`docs/sozlesme-okuma-komutu.md`, 17 Kas): Windows komutu kodlu betikten (`-EncodedCommand`) çıkarıldı; betik sabit metindir
+// ve standart girdiden verilir. Eski biçimi Microsoft Defender süreç doğarken engelliyordu (RESEARCH 17 Kas 14:55).
 // =====================================================================
 
 export const SENK_PARCA_MESAJ = 300;
@@ -60,30 +62,59 @@ export function sistemKomutu(kok, goreli, yedek) {
   return `${kok.replace(/[\\/]+$/, '')}\\System32\\${goreli}`;
 }
 
+/** Okuma betiğinin okuduğu üç ortam değişkeninin adı (`docs/sozlesme-okuma-komutu.md` §2). */
+export const OKUMA_ORTAMI = { yol: 'VIBENTO_OKU_YOL', bas: 'VIBENTO_OKU_BAS', uzunluk: 'VIBENTO_OKU_UZUNLUK' };
+
 /**
- * Dosyanın [bas, bas+uzunluk) bayt aralığını base64 olarak stdout'a yazan komut (argv). Geçersiz girdide null.
- * Windows: PowerShell `-EncodedCommand` (UTF-16LE base64; yol ayrıca base64). Paylaşım ReadWrite+Delete: Claude Code
- * dosyaya yazmayı sürdürürken okunur. Diğerleri: `/bin/sh -c 'tail -c +N "$1" | head -c M | base64 | tr -d "\n"'`, yol konumsal argüman.
+ * Windows okuma betiği (`docs/sozlesme-okuma-komutu.md` §1-§2): SABİT metin, tek satır, sonunda tek LF. İçine hiçbir çalışma zamanı
+ * değeri yazılmaz: yol, baş ve uzunluk `OKUMA_ORTAMI`'ndaki üç ortam değişkeninden okunur (yol betik olarak yorumlanamaz; tarama 2 Kas'ın
+ * "kıvrık tırnak" sınıfı böylece yapısal olarak kalkar). Paylaşım ReadWrite+Delete: Claude Code dosyaya yazmayı sürdürürken okunur.
+ * Çıkış kodu: okuma başarılıysa 0 ve çıktı `OKUMA_ONEKI` + base64 (dosya sonu geçildiyse okunabilen kadar; boş dosyada yalnız önek),
+ * her hatada 1 ve boş çıktı. Baş ve uzunluk betikte de denetlenir (yalnız rakam; Ek 1, güvenlik okuması K-3): yolda düşen ya da
+ * bozulan bir değer 0'a çevrilip YANLIŞ yerden okunmaz, hata sayılır.
+ * ⚠ Parçalar düz dizgedir (şablon dizgesi DEĞİL): ara değer yazılamaz. Değiştirmeden önce sözleşmenin §3'ünü ve Ek 1'ini oku.
+ */
+export const PENCERE_BETIGI = "$ErrorActionPreference='Stop';$k=1;"
+  + "try{$p=$env:VIBENTO_OKU_YOL;if($env:VIBENTO_OKU_BAS -notmatch '^[0-9]{1,16}$' -or $env:VIBENTO_OKU_UZUNLUK -notmatch '^[0-9]{1,7}$'){throw 'girdi'};"
+  + '$s=[long]$env:VIBENTO_OKU_BAS;$u=[int]$env:VIBENTO_OKU_UZUNLUK;'
+  + '$f=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete);'
+  + 'try{[void]$f.Seek($s,[IO.SeekOrigin]::Begin);$b=New-Object byte[] $u;$t=0;'
+  + 'while($t -lt $u){$r=$f.Read($b,$t,$u-$t);if($r -le 0){break};$t+=$r};'
+  + "[Console]::Out.Write('VBT1:'+[Convert]::ToBase64String($b,0,$t));$k=0}finally{$f.Dispose()}}catch{$k=1};exit $k"
+  + String.fromCharCode(LF); // satır sonu kod noktasından (kaynağa kaçış dizisi yazılmaz; LESSONS 16 Eki)
+
+/**
+ * Windows betiğinin başarıda çıktının BAŞINA yazdığı sabit işaret (Ek 1, güvenlik okuması K-1). `dosyaOku` öneki şart koşar: önek
+ * yoksa betik hiç koşmamıştır (standart girdi teslim edilmedi: PowerShell boş girdide çıkış 0 ve boş çıktı verir) ve bu "boş okuma"
+ * SAYILMAZ. base64 alfabesinde `:` yoktur; karışmaz. Betikteki `'VBT1:'` ile AYNI olmalı (test ikisini kıyaslar).
+ */
+export const OKUMA_ONEKI = 'VBT1:';
+
+/**
+ * Dosyanın [bas, bas+uzunluk) bayt aralığını base64 olarak stdout'a yazan ÇAĞRI: `{ argv, girdi, ortam, onek }`. Geçersiz girdide null.
+ * Windows: komut satırı sabit (`powershell -NoProfile -NonInteractive -Command -`), betik (`PENCERE_BETIGI`) standart girdiden, yol / baş /
+ * uzunluk ortam değişkeninden; çıktı `OKUMA_ONEKI` ile başlar. Kodlu betik (`-EncodedCommand`) ve `-ExecutionPolicy` YOK (0.1.27; eski
+ * biçimi Defender engelliyordu). Diğerleri: `/bin/sh -c 'tail -c +N "$1" | head -c M | base64 | tr -d "\n"'`, yol konumsal argüman;
+ * girdi, ortam ve önek null (o dal değişmedi).
+ * @returns {{ argv: string[], girdi: string | null, ortam: Record<string, string> | null, onek: string | null } | null}
  */
 export function pencereKomutu(dosya, bas, uzunluk, /** @type {string | null} */ sistemKoku = null) {
   if (typeof dosya !== 'string' || dosya.length === 0 || dosya.length > 1024 || DENETIM.test(dosya)) return null;
   if (!Number.isSafeInteger(bas) || bas < 0 || !Number.isSafeInteger(uzunluk) || uzunluk <= 0 || uzunluk > PENCERE_TAVANI) return null;
   if (windowsYolu(dosya)) {
-    // Yol betik metnine GİRMEZ: PowerShell kıvrık tırnağı da tırnak sayar (tarama 2 Kas, kanıtlandı). UTF-16LE base64 olarak verilir, betikte çözülür.
-    const yolBayt = new Uint8Array(dosya.length * 2);
-    for (let i = 0; i < dosya.length; i += 1) { const k = dosya.charCodeAt(i); yolBayt[i * 2] = k & 255; yolBayt[i * 2 + 1] = k >> 8; }
-    const yol = base64Yaz(yolBayt);
-    const betik = "$ErrorActionPreference='Stop';"
-      + `$p=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${yol}'));`
-      + `$f=[IO.File]::Open($p,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete);`
-      + `try{[void]$f.Seek(${bas},[IO.SeekOrigin]::Begin);$b=New-Object byte[] ${uzunluk};$t=0;`
-      + `while($t -lt ${uzunluk}){$r=$f.Read($b,$t,${uzunluk}-$t);if($r -le 0){break};$t+=$r};`
-      + '[Console]::Out.Write([Convert]::ToBase64String($b,0,$t))}finally{$f.Dispose()}';
-    const utf16 = new Uint8Array(betik.length * 2);
-    for (let i = 0; i < betik.length; i += 1) { const k = betik.charCodeAt(i); utf16[i * 2] = k & 255; utf16[i * 2 + 1] = k >> 8; }
-    return [sistemKomutu(sistemKoku, 'WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe'), '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', base64Yaz(utf16)];
+    return {
+      argv: [sistemKomutu(sistemKoku, 'WindowsPowerShell\\v1.0\\powershell.exe', 'powershell.exe'), '-NoProfile', '-NonInteractive', '-Command', '-'],
+      girdi: PENCERE_BETIGI,
+      ortam: { [OKUMA_ORTAMI.yol]: dosya, [OKUMA_ORTAMI.bas]: String(bas), [OKUMA_ORTAMI.uzunluk]: String(uzunluk) },
+      onek: OKUMA_ONEKI,
+    };
   }
-  return ['/bin/sh', '-c', 'tail -c +"$2" "$1" | head -c "$3" | base64 | tr -d "\\n"', 'sh', dosya, String(bas + 1), String(uzunluk)];
+  return {
+    argv: ['/bin/sh', '-c', 'tail -c +"$2" "$1" | head -c "$3" | base64 | tr -d "\\n"', 'sh', dosya, String(bas + 1), String(uzunluk)],
+    girdi: null,
+    ortam: null,
+    onek: null,
+  };
 }
 
 /**

@@ -68,13 +68,21 @@ export async function istekYap(io: Io, sunucu: string, token: string, yol: strin
   }
 }
 
-/** Dosyanın [bas, bas+uzunluk) baytları (işletim sisteminin aracıyla) ya da null. */
+/**
+ * Dosyanın [bas, bas+uzunluk) baytları (işletim sisteminin aracıyla) ya da null.
+ * 0.1.27 (`docs/sozlesme-okuma-komutu.md`): Windows'ta betik standart girdiden, yol / baş / uzunluk ortam değişkeninden gider.
+ * Hata davranışı aynen: komut başlatılamazsa fırlatır (çağıranların `try`'ı yakalar), çıkış kodu 0 değilse null.
+ * Önek (Ek 1, K-1): Windows betiği başarıda çıktının başına sabit işaret yazar. İşaret yoksa betik hiç koşmamıştır (standart girdi
+ * teslim edilmedi; PowerShell o durumda çıkış 0 ve boş çıktı verir): null, "boş okuma" sayılmaz.
+ */
 export async function dosyaOku(io: Io, dosya: string, bas: number, uzunluk: number): Promise<Uint8Array | null> {
-  const argv = pencereKomutu(dosya, bas, uzunluk, await io.sistemKlasoru().catch(() => null))
-  if (!argv) return null
-  const r = await io.komut(argv, 20_000)
+  const k = pencereKomutu(dosya, bas, uzunluk, await io.sistemKlasoru().catch(() => null))
+  if (!k) return null
+  const r = await io.komut(k.argv, 20_000, { girdi: k.girdi, ortam: k.ortam })
   if (r.exitCode !== 0) return null
-  return base64Coz(r.stdout.trim())
+  const cikti = r.stdout.trim()
+  if (k.onek === null) return base64Coz(cikti)
+  return cikti.startsWith(k.onek) ? base64Coz(cikti.slice(k.onek.length)) : null
 }
 
 const oku = dosyaOku
