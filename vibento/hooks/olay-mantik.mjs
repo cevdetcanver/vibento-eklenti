@@ -174,6 +174,8 @@ export function kuyrukKopyasi(govde) {
   delete k.onay_karari;
   delete k.ad_listesi_iste;
   delete k.vekalet_iste;
+  // 0.1.28: kanca hata kayıtları kuyruğa girmez; depoda kalır ve sıradaki CANLI gönderimle gider (kuyruktaki kopya ikinci kez yollatırdı).
+  delete k.kanca_hatalari;
   if (k.olay === 'UserPromptSubmit') delete k.pencere_adi;
   return k;
 }

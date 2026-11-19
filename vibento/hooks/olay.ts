@@ -9,6 +9,7 @@ import type { Io } from './io.ts'
 import {
   KUYRUK_ANAHTARI, KUYRUK_BOSALTMA, govdeKur, kuyrugaEkle, yanitGovdesi, teslimAnahtari, teslimEkle, teslimKimlikleri,
 } from './olay-mantik.mjs'
+import { hataAnahtari, hataGonderilecek, hataKalan } from './hata-mantik.mjs'
 
 export type Gonderim = { kod: number; govde: Record<string, unknown> | null }
 
@@ -84,12 +85,25 @@ export function olayKur(sunucu: string) {
       const tAnahtar = teslimAnahtari(olay.session_id)
       const bekleyenTeslim = tAnahtar ? teslimKimlikleri(await io.depoOku(tAnahtar)) : []
       if (bekleyenTeslim.length > 0) govde.teslim_alindi = bekleyenTeslim
+      // 0.1.28 (sözleşme kanca-hatasi §2.3): motorun atladığı kancaların kayıtları (yalnız tür, sınıf, uzunluk; metin yok) bu oturumun
+      // sıradaki olayıyla gider; sunucu aldığını söyleyince depodan düşer. Okunamazsa gövde kayıtsız gider, tur bozulmaz.
+      const hAnahtar = hataAnahtari(olay.session_id)
+      let bekleyenHata: ReturnType<typeof hataGonderilecek> = []
+      try { bekleyenHata = hAnahtar ? hataGonderilecek(await io.depoOku(hAnahtar)) : [] } catch { bekleyenHata = [] }
+      if (bekleyenHata.length > 0) govde.kanca_hatalari = bekleyenHata
       const r = await istek(io, token, govde, butce(String(govde.olay)))
       if (r.kod === 401 || r.kod === 403) return 'reddedildi'
       if (r.kod >= 200 && r.kod < 300) {
         if (tAnahtar && bekleyenTeslim.length > 0 && r.govde?.ok === true) {
           const kalan = teslimKimlikleri(await io.depoOku(tAnahtar)).filter((k) => !bekleyenTeslim.includes(k))
           await io.depoYaz(tAnahtar, kalan)
+        }
+        if (hAnahtar && bekleyenHata.length > 0 && r.govde?.ok === true) {
+          try {
+            const kalan = hataKalan(await io.depoOku(hAnahtar), bekleyenHata)
+            if (kalan.length > 0) await io.depoYaz(hAnahtar, kalan)
+            else await io.depoSil(hAnahtar)
+          } catch { /* silinemezse kayıt bir kez daha gider; sunucu aynı kaydı iki olayda görür, tur bozulmaz */ }
         }
         return r
       }

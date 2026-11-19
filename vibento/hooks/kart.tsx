@@ -12,6 +12,7 @@ import type { On } from 'claude-code'
 import { KART_DEPO_ANAHTARI, NEDEN_BICIM, ajanGoster, bantRengi, dugmeIzni, dugmeYokNedeni, duzMetin, kartAnahtari, kartDugmeIzni, kartPlani, kaynakBul, metinBol, soruGirisi, temizGoster, toplamCevap } from './kart-mantik.mjs'
 import { uyandirmaMetniMi } from './olay-mantik.mjs'
 import { sunucuAdresi } from './esleme-mantik.mjs'
+import { altinSonucu, hataYaz } from './hata.ts'
 
 const ISTEK_ZEMINI = 'diffRemovedDimmed'
 const BANT_YAZISI = '#10241c'
@@ -51,6 +52,10 @@ export const kartKaydet = (on: On) => {
     } catch {
       return next(e)
     }
+  }).catch(async ($, e, next) => {
+    // 0.1.28 (`docs/sozlesme-kanca-hatasi.md`): çizim kancası uçuştayken işçi kaybolursa eklenti boşaltılmasın; satırı motor çizer.
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, await $.session.id().catch(() => null), 'ui.render.UserMessage', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
@@ -311,5 +316,8 @@ export const kartKaydet = (on: On) => {
     } catch {
       return next(e)
     }
+  }).catch(async ($, e, next) => {
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, await $.session.id().catch(() => null), 'ui.render.AssistantMessage', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 }

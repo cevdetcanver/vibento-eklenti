@@ -27,6 +27,8 @@ import { altAjanEsitle } from './altajan.ts'
 import { uyandirmaKur } from './uyandirma.ts'
 import { arkaPlanKur } from './arka-plan.ts'
 import type { Surec } from './io.ts'
+// 0.1.28 (`docs/sozlesme-kanca-hatasi.md`): her kancanın hata kapısı (`.catch`). Kapı yoksa motor, işçi kaybında eklentiyi boşaltır.
+import { altinSonucu, hataYaz } from './hata.ts'
 
 const kartPencere = atom({ plugin: 'vibento', key: 'kartPencere' } as const, null)
 const sonSoru = atom({ plugin: 'vibento', key: 'sonSoru' } as const, '')
@@ -145,6 +147,16 @@ export const register: Register = (on, options) => {
       try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }
     }
     return r
+  }).catch(async ($, e, next) => {
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, await $.session.id().catch(() => null), 'turn.start', next.error, next.called)
+    // Gövdenin adımları kapıda da yapılır (ana turda): yoklama durur (işçi yenilendiyse durduracak zamanlayıcı yoktur, çağrı boşa düşer)
+    // ve eski sorunun düğmesi kalkar (tur sürerken canlı kalan düğme yeni soruya okunmasın).
+    if (e.agentId === undefined) {
+      try { uyandirma.turBasladi() } catch { /* yoklama Stop'ta yeniden kurulur */ }
+      try { await update($, sonSoru, () => '') } catch { /* görünüm */ }
+      try { await update($, sonKartlar, () => []) } catch { /* görünüm */ }
+    }
+    return altinSonucu(() => next(e))
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -155,9 +167,28 @@ export const register: Register = (on, options) => {
       try {
         const anahtar = turAnahtari(await $.session.id())
         if (anahtar) await $.store.set(anahtar, crypto.randomUUID())
-      } catch { /* kimlik yazılamazsa sunucu sıkı yönde karar verir */ }
+      } catch { /* kimlik yazılamazsa ESKİ kimlik yerinde kalır (gevşek yön; bilinen sınır, sözleşme kanca-hatasi §5) */ }
     }
     return r
+  }).catch(async ($, e, next) => {
+    // SIKI YÖN (bağımsız okuma 19 Kas, Y1; test `eklenti/vibento/tests/hata.test.ts` "tur sonu olayi duserse tur kimligi yine yenilenir"):
+    // gövde tur kimliğini yenilemeden düştüyse sıradaki İSTEMSİZ turun (görev bildirimi, alt ajan dönüşü) araç çağrıları son insan
+    // isteminin kimliğini taşır ve sunucu kullanıcının sözünü o tura da sayardı. Eskiden bu düşüş eklentiyi boşaltıyor, kanıtsız çağrı
+    // reddediliyordu; kapı eklentiyi yüklü tuttuğu için yenilemeyi kapı da yapar (yalnız depo yazımı). Yetkiyi daraltan bu adım hata
+    // kaydından ÖNCE gelir (ikinci okuma): kayıt yazımı takılırsa yenileme atlanmasın. Yeni kimlik yazılamazsa eski kimlik SİLİNİR
+    // (kimliksiz çağrıda sunucu en çok 10 dakikalık eski ölçüyü uygular ve hiçbir pencereyi anılmış saymaz); o da olmazsa eski kimlik
+    // yerinde kalır (bilinen sınır, sözleşme kanca-hatasi §5).
+    if (e.agentId === undefined) {
+      try {
+        const anahtar = turAnahtari(await $.session.id())
+        if (anahtar) {
+          try { await $.store.set(anahtar, crypto.randomUUID()) } catch { await $.store.delete(anahtar) }
+        }
+      } catch { /* oturum okunamadı ya da depo yazılamadı: eski kimlik kalır (bilinen sınır) */ }
+      try { if (e.reason !== 'answer') uyandirma.turBitti() } catch { /* yoklama Stop'ta yeniden kurulur */ }
+    }
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, await $.session.id().catch(() => null), 'turn.complete', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 
   on('classic.SessionStart', async ($, e, next) => {
@@ -218,6 +249,10 @@ export const register: Register = (on, options) => {
     } catch {
       return r
     }
+  }).catch(async ($, e, next) => {
+    // Açılış bağlamı bu kez gelmez (olay sunucuya gitmiş olabilir: yeniden gönderilmez); ilk istem olağan yoldan gider.
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, e.session_id, 'classic.SessionStart', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 
   on('classic.UserPromptSubmit', async ($, e, next) => {
@@ -300,6 +335,10 @@ export const register: Register = (on, options) => {
     } catch {
       return r
     }
+  }).catch(async ($, e, next) => {
+    // İstem durdurulmaz (fail-open; ad kapısı ve onay kararı bu istemde işlemez). Olay sunucuya gitmiş olabilir: yeniden gönderilmez.
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, e.session_id, 'classic.UserPromptSubmit', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 
   // Kimlik kanıtı (değişmez 14): ağ yok, depo yazımı yok; yalnız jeton okunur. Vibento dışı araçta hiçbir şey yapılmaz.
@@ -320,6 +359,33 @@ export const register: Register = (on, options) => {
       const yeni = await aracKimligiGirdisi(e.tool, oturum, girdi, jeton, sunucuTanir && turKimligiGecerli(tur) ? tur : null)
       const sonuc = yeni ? { ...r, updatedInput: yeni } : r
       // Altta karar yoksa eklentinin kendi araçları izin sormaz (kimlik-mantik.mjs izinVerilirMi); değişmez 14'ün eklentideki tek eki.
+      if (izinVerilirMi(e.tool) && !r.allow && !r.ask && !r.deny) {
+        return { allow: true as const, ...(yeni ? { updatedInput: yeni } : {}), ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}) }
+      }
+      return sonuc
+    } catch {
+      return r
+    }
+  }).catch(async ($, e, next) => {
+    // 0.1.28: uçuştaki araç çağrısı kanıtsız kalmasın (sunucu kanıtsız çağrıyı reddeder ve pencereye "eklenti kapalı olabilir" der; oysa
+    // eklenti yüklü kaldı). Kapı kancanın gövdesini BİR KEZ daha koşar: depo yalnız okunur, ağ yok; her adım yukarıdakiyle aynıdır
+    // (`tests/kanca-hatasi.test.mjs` iki gövdenin aynı kaldığını metinden sınar). Değişmez 14'ün tek eki: kapı hata kaydını depoya yazar.
+    const oturumKimligi = await $.session.id().catch(() => null)
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, oturumKimligi, 'classic.PreToolUse', next.error, next.called)
+    const r = await altinSonucu(() => next(e))
+    if (r === undefined) return r
+    try {
+      if (vibentoAracAdi(e.tool) === null) return r
+      const { tool: _arac, tool_use_id: _kimlik, agentId: _ajan, ...girdi } = e as unknown as Record<string, unknown>
+      const k = await $.store.get('vibento.baglanti') as { token?: unknown } | undefined
+      const jeton = typeof k?.token === 'string' ? k.token : null
+      const oturum = await $.session.id()
+      const tAnahtar = turAnahtari(oturum)
+      const tur = tAnahtar ? await $.store.get(tAnahtar) : null
+      const kAnahtar = kanitAnahtari(oturum)
+      const sunucuTanir = kAnahtar ? (await $.store.get(kAnahtar)) === 2 : false
+      const yeni = await aracKimligiGirdisi(e.tool, oturum, girdi, jeton, sunucuTanir && turKimligiGecerli(tur) ? tur : null)
+      const sonuc = yeni ? { ...r, updatedInput: yeni } : r
       if (izinVerilirMi(e.tool) && !r.allow && !r.ask && !r.deny) {
         return { allow: true as const, ...(yeni ? { updatedInput: yeni } : {}), ...(r.additionalContext ? { additionalContext: r.additionalContext } : {}) }
       }
@@ -395,6 +461,29 @@ export const register: Register = (on, options) => {
     } catch {
       return r
     }
+  }).catch(async ($, e, next) => {
+    const io: Io = {
+      depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v), depoSil: (k) => $.store.delete(k),
+      istek: (u, s) => $.http.fetch(u, s), komut: async (a, ms, s) => $.process.run(a, komutSecenegi(ms, (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? undefined, s)),
+      herBirde: (ms, fn) => $.clock.every(ms, fn), sonra: (ms, fn) => $.clock.after(ms, fn), bildir: (t) => $.ui.toast(t),
+      simdi: () => $.clock.now(),
+      dosyaBoyu: async (y) => { try { const s = await $.fs.stat(y); return typeof s?.size === 'number' ? s.size : null } catch { return null } },
+      dizin: async (y) => (await $.fs.list(y)).map((g) => ({ name: g.name, kind: g.kind, size: g.size, mtimeMs: g.mtimeMs })),
+      istemGonder: (t) => $.prompt.submit({ text: t }),
+      evKlasoru: async () => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? null,
+      sistemKlasoru: async () => (await $.env.get('SystemRoot')) ?? null,
+      dosyaYaz: (y, m) => $.fs.write(y, m),
+      dosyaOku: async (y) => String(await $.fs.read(y)),
+      mcpBagla: async () => { await $.mcp.connect('vibento') },
+    }
+    await hataYaz(io, e.session_id, 'classic.Stop', next.error, next.called)
+    // İşçi yenilendiyse eklentinin zamanlayıcıları da gitti: pencere boşa düşerken uyandırma yoklaması yeniden kurulur (yalnız zamanlayıcı;
+    // bu kapıda ağ yok). Tur sonu olayı sunucuya gitmemiş olabilir: yeniden gönderilmez, sıradaki olay olağan yoldan gider.
+    try {
+      const bagli = await esleme.baglantiOku(io)
+      if (bagli) uyandirma.basla(io, bagli.token, e.session_id)
+    } catch { /* yoklama sonraki tur sonunda başlar */ }
+    return altinSonucu(() => next(e))
   })
 
   on('classic.PreCompact', async ($, e, next) => {
@@ -421,6 +510,9 @@ export const register: Register = (on, options) => {
       // fail-open
     }
     return r
+  }).catch(async ($, e, next) => {
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, e.session_id, 'classic.PreCompact', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 
   on('classic.SessionEnd', async ($, e, next) => {
@@ -459,5 +551,9 @@ export const register: Register = (on, options) => {
       // fail-open
     }
     return r
+  }).catch(async ($, e, next) => {
+    // Kapanışta kayıt depoda kalır; aynı konuşma yeniden açılırsa ilk olayla gider.
+    await hataYaz({ depoOku: (k) => $.store.get(k), depoYaz: (k, v) => $.store.set(k, v) }, e.session_id, 'classic.SessionEnd', next.error, next.called)
+    return altinSonucu(() => next(e))
   })
 }
