@@ -27,7 +27,8 @@ export const EK_KESMELI = 6;
  * adın son harfine göre: ünsüzle biten ada "a, i, da, dan, in, la" ailesi; ünlüyle biten ada kaynaştırmalı "ya, yi, nin, yla" ve
  * tamlama sonrası "na, ni, nda, ndan" ailesi ("soru bankasına", "marka sitesinden").
  * Neden (güvenlik taraması 13 Kas B6): "en çok dört harf" ölçüsü "Kar" için karar, kart, kardeş; "Kasa" için kasap, kasaba; "Pazar" için
- * pazartesi; "Dur" için durum sayıyordu. Kesme işaretli ekte liste aranmaz (kesme niyeti gösterir). Ünsüz yumuşaması ("Merceğe") eşleşmez.
+ * pazartesi; "Dur" için durum sayıyordu. Kesme işaretli ekte liste aranmaz (kesme niyeti gösterir). Ünsüz yumuşaması ("Merceğe") bu
+ * listelerle eşleşmez; onun kuralı aşağıda ayrıdır (`yumusakGovde`).
  * Kalan yanlış eşleşme: ekle aynı yazılan başka kelime ("Kar" için kara, karı). Eşleştirme izin verir, iş göndermez.
  */
 export const EKLER_UNSUZ = new Set(['a', 'e', 'i', 'u', 'da', 'de', 'ta', 'te', 'dan', 'den', 'tan', 'ten', 'in', 'un', 'la', 'le', 'daki', 'deki', 'taki', 'teki']);
@@ -36,6 +37,38 @@ export const EKLER_UNLU = new Set([
   'na', 'ne', 'ni', 'nu', 'nda', 'nde', 'ndan', 'nden',
 ]);
 const UNLULER = new Set(['a', 'e', 'i', 'o', 'u']);
+
+/**
+ * ÜNSÜZ YUMUŞAMASI (0.1.29; sözleşme docs/sozlesme-unvanlar.md "Ek D2f"). Ünlüyle başlayan ek adın son ünsüzünü yumuşatır ("Rapor
+ * Çekirdek" → "Rapor Çekirdeğe"): gövde harfi harfine tutmaz, ad eşleşmez; aynı yerde başlayan kısa ad ("Rapor") eşleşirdi. Bu yüzden
+ * katlanmış adın YUMUŞAMIŞ GÖVDESİ ayrıca aranır: son harf k → g, p → b.
+ * · ç → c için kural gerekmez: katlama ikisini aynı harfe indirir.
+ * · t → d YOKTUR: ünlüyle biten bir adın bulunma hâliyle çakışır ("Konut" penceresi "bu konuda" ile anılmış sayılırdı).
+ * · Adın son sözcüğü en az İKİ ünlü taşımalıdır: tek ünlülü sözcüklerin çoğu yumuşamaz ("küpe", "çarka"); aranırsa başka sözcükler
+ *   ad sayılırdı ("Sevk" için "sevgi", "Kap" için "kaba"). Son sözcük = adın sonundaki kesintisiz harf / rakam dizisidir: boşluk
+ *   gibi tire, eğik çizgi ve nokta da ayırır ("Ön-Kap"ın son sözcüğü "kap"tır; bağımsız okuma 19 Kas B3).
+ * Kalan yanlış eşleşme: yumuşamış biçimle aynı yazılan başka kelime ("Arap" için "araba", "Gelecek" için "geleceği söyledi").
+ * Eşleştirme izin verir, iş göndermez.
+ */
+const YUMUSAMA = new Map([['k', 'g'], ['p', 'b']]);
+/** Yumuşamış gövdenin ardından gelebilen ekler: BİTİŞİK, KESMESİZ, yalnız bu altısı (yönelme, belirtme, tamlayan). Ek ŞARTTIR. */
+export const EKLER_YUMUSAK = new Set(['a', 'e', 'i', 'u', 'in', 'un']);
+/** Yumuşamış gövdenin ardında okunan en çok harf: en uzun ek iki harf; üçüncü harf görülünce eşleşme yoktur (süre sınırı). */
+const EK_YUMUSAK_OKUMA = 3;
+
+/**
+ * Katlanmış adın yumuşamış gövdesi ("panel cekirdek" → "panel cekirdeg"); kural tutmuyorsa null.
+ * @param {unknown} ad `katla`'dan geçmiş ad
+ * @returns {string | null}
+ */
+export function yumusakGovde(ad) {
+  if (typeof ad !== 'string' || ad.length === 0) return null;
+  const yumusak = YUMUSAMA.get(ad.charAt(ad.length - 1));
+  if (yumusak === undefined) return null;
+  let unlu = 0;
+  for (let i = ad.length - 1; i >= 0 && harfMi(ad.charAt(i)); i -= 1) if (UNLULER.has(ad.charAt(i))) unlu += 1;
+  return unlu >= 2 ? ad.slice(0, -1) + yumusak : null;
+}
 /** Eşleştirmeye giren istem en çok bu kadar karakter; daha uzunu eşleştirilmez (söz hiçbir pencereye yetmez; süre sınırı). */
 export const ISTEM_AZAMI = 262_144;
 /** Sarmal bloklar atıldıktan sonra kalan metnin eşleştirilen bölümü (baştan). */
@@ -169,11 +202,28 @@ function eslesmeSonu(metin, ad, bas) {
 }
 
 /**
+ * `metin` içinde `bas` konumunda başlayan YUMUŞAMIŞ `govde` eşleşmesinin bittiği konum (ek dahil değil), eşleşme yoksa -1.
+ * Kelime başı şart; gövdenin hemen ardından bitişik ve kesmesiz, `EKLER_YUMUSAK`'tan bir ek gelmeli (yalın yumuşak gövde ad değildir).
+ * Dönen aralık adla aynı uzunluktadır: "aynı yerde en uzun ad" kuralına harfi harfine eşleşmelerle birlikte girer.
+ */
+function yumusakSonu(metin, govde, bas) {
+  if (!metin.startsWith(govde, bas)) return -1;
+  if (bas > 0 && harfMi(metin.charAt(bas - 1))) return -1;
+  const son = bas + govde.length;
+  let p = son;
+  while (p < metin.length && harfMi(metin.charAt(p))) {
+    p += 1;
+    if (p - son >= EK_YUMUSAK_OKUMA) return -1;
+  }
+  return EKLER_YUMUSAK.has(metin.slice(son, p)) ? son : -1;
+}
+
+/**
  * İstem metninde anılan pencerelerin bölüm kimlikleri (LİSTE sırasıyla, tekrarsız, en çok 20). Metindeki geçiş sırası dönmez: sunucu
  * kimliklerden kelimelerin sırasını öğrenmesin (güvenlik taraması 13 Kas B3); karar için sıra gerekmez, yalnız "anıldı mı".
  * Kelime başında başlamalı; ardından kelime sonu, kesme işareti + ek ya da bilinen bir bitişik hâl eki gelebilir ("Video", "Video'ya",
  * "Kasadan"). Aynı yerde başlayan adlardan EN UZUNU sayılır ("Video Pro'ya" yalnız Video Pro'dur, Video değil); kısa ad başka yerde
- * ayrıca geçiyorsa sayılır.
+ * ayrıca geçiyorsa sayılır. Ünsüz yumuşaması da eşleşir ("Bakır Merceğe", "Rapor Çekirdeği"): kuralı ve sınırı `yumusakGovde`'de.
  * @param {unknown} metin
  * @param {{ b: string, adlar: string[] }[]} liste `adListesiHazirla` çıktısı
  * @returns {string[]}
@@ -193,10 +243,23 @@ export function anilanlariBul(metin, liste) {
         if (son !== -1) bulunan.push({ bas: p, son, b: s.b });
         p = m.indexOf(ad, p + 1);
       }
+      // Yumuşamış gövde (Ek D2f): ayrı geçiş sayacı; aralığı adla aynı uzunlukta, aşağıdaki "en uzun ad" seçimine birlikte girer.
+      const govde = yumusakGovde(ad);
+      if (govde === null) continue;
+      let q = m.indexOf(govde);
+      let yumusakGecis = 0;
+      while (q !== -1 && yumusakGecis < AD_GECIS_TAVANI) {
+        yumusakGecis += 1;
+        const son = yumusakSonu(m, govde, q);
+        if (son !== -1) bulunan.push({ bas: q, son, b: s.b, yumusak: true });
+        q = m.indexOf(govde, q + 1);
+      }
     }
   }
-  // Uzun eşleşme önce; onun kapladığı aralıkta başlayan kısa eşleşmeler düşer.
-  bulunan.sort((x, y) => (x.bas - y.bas) || ((y.son - y.bas) - (x.son - x.bas)));
+  // Uzun eşleşme önce; onun kapladığı aralıkta başlayan eşleşmeler düşer (soldan açgözlü seçim). Aynı yerde, aynı uzunlukta iki
+  // eşleşmede HARFİ HARFİNE yazılan ad kazanır: bir adın yumuşamış gövdesi başka bir adın birebir yazımıysa ("Kitap" ve "Kitab";
+  // "kitaba" yazan Kitab'ı yazmıştır) söz, yazılan ada yeter (bağımsız okuma 19 Kas B1; liste sırasına bağlı kalmaz).
+  bulunan.sort((x, y) => (x.bas - y.bas) || ((y.son - y.bas) - (x.son - x.bas)) || ((x.yumusak ? 1 : 0) - (y.yumusak ? 1 : 0)));
   const anilan = new Set();
   let kapali = -1;
   for (const e of bulunan) {
