@@ -11,7 +11,9 @@ import { etiketliKomutMu } from './ad-mantik.mjs';
 
 // Eklenti bugünkü kancanın 24. sürümüyle aynı özellik sözleşmesini taşır (sunucu özellikleri sayısal sürümle açar: ≥14 pencere mesajı,
 // ≥16 uyandırma alanı, ≥20 istem öneki, ≥22 onay kararı). Bütün dilimler bitmeden eklenti dağıtılmaz.
-export const HOOK_SURUM = '25';
+// 26 (20 Kas): günlük ayrıştırıcısı tur ortasında yazılan insan mesajını da alır (`docs/sozlesme-gunluk-tamligi.md` §2); sunucudaki
+// `HOOK_SURUM` ile birlikte artar (ayrıştırıcının kopyası `gunluk.mjs`, `scripts/eklenti-esitle.mjs` ile üretilir).
+export const HOOK_SURUM = '26';
 export const KUYRUK_ANAHTARI = 'vibento.kuyruk';
 export const KUYRUK_TAVANI = 500;
 export const KUYRUK_BOSALTMA = 20;

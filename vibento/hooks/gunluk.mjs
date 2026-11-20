@@ -916,8 +916,91 @@ const satirlariAyristir = function (metin, baslangicSira, secenekler) {
     yerelUyari[ad] = (yerelUyari[ad] || 0) + 1;
   };
 
+  // --- tur ortasında yazılan insan mesajı (kanca 26) ---------------------
+  // Bu ÇAĞRIDA görülen insan kaydı kimlikleri → o kimlikten satır üretmiş blok
+  // sıraları. Aynı `uuid` dosyada yeniden yazılabiliyor (ölçüm: 159 kayıtta bir
+  // kimlik 4 kez, satırlar birebir aynı). Çağrılar arası tekrar taşınmaz;
+  // sunucu `(seans_id, uuid)` ile atlar. Haritalar prototipsiz (kimlik dökümden).
+  const buCagriInsan = Object.create(null);
+
+  // `attachment:queued_command` + `origin.kind === "human"` → kullanıcı
+  // satırları (`docs/sozlesme-gunluk-tamligi.md` §2). YALNIZ kanca 15 kaydı
+  // aday saymadıysa çağrılır: `origin`da `msg_id` varsa o yol önceliklidir.
+  // true = insan kaydıydı (satır üretti ya da "tur_ortasi:*" diye sayıldı);
+  // false = insan kaydı değil (görev bildirimi, alt ajan dönüşü, originsiz) →
+  // eski yol (`atla("attachment")`).
+  const insanKuyrukIsle = function (kayit, ek, zaman) {
+    const origin = ek.origin;
+    if (!origin || typeof origin !== "object" || Array.isArray(origin) || origin.kind !== "human") return false;
+    const uuidVar = typeof kayit.uuid === "string" && kayit.uuid.length > 0;
+    const kimlik = uuidVar ? kayit.uuid : "attachment-" + String(ofset);
+    // Tekrar BLOK BAŞINA izlenir (şartname Ek 2): aynı `uuid` bu çağrıda yeniden
+    // gelirse yalnız daha önce satır üretmemiş bloklar satır üretir. Böylece
+    // sonuç okuma penceresinin sınırına bağlı kalmaz: kopyalar ayrı çağrılara
+    // düşseydi hepsi yeniden üretilir, sunucu `(seans_id, uuid)` ile atlardı.
+    let uretenBloklar = null;
+    let onceGoruldu = false;
+    if (uuidVar) {
+      const onceki = kendi(buCagriInsan, kimlik);
+      if (onceki !== undefined) {
+        uretenBloklar = onceki;
+        onceGoruldu = true;
+      } else {
+        uretenBloklar = Object.create(null);
+        buCagriInsan[kimlik] = uretenBloklar;
+      }
+    }
+    const an = zaman !== null ? zaman : typeof ek.timestamp === "string" ? ek.timestamp : null;
+    // Dizge `prompt` tek metin bloğu sayılır; dizi blok blok; başka her şey boş.
+    const bloklar = typeof ek.prompt === "string"
+      ? [{ type: "text", text: ek.prompt }]
+      : Array.isArray(ek.prompt)
+        ? ek.prompt
+        : [];
+    let uretilen = 0;
+    for (let b = 0; b < bloklar.length; b += 1) {
+      const blok = bloklar[b];
+      if (!blok || typeof blok !== "object") continue;
+      const blokTuru = typeof blok.type === "string" ? blok.type : "(tursuz)";
+      let tur = "metin";
+      let govde = "";
+      let bilinmeyen = false;
+      if (blokTuru === "text") {
+        // Boş ya da yalnız boşluk metin satır üretmez (yalnız görsel yazılmış
+        // mesajın boş metin bloğu; ölçüm: 159 kayıtta 8).
+        if (typeof blok.text !== "string" || blok.text.trim().length === 0) continue;
+        govde = blok.text;
+      } else if (blokTuru === "image" || blokTuru === "document") {
+        // İkili veri asla gönderilmez: `user` satırındaki ekle aynı yer tutucu.
+        tur = "ek";
+        govde = ekAdi(blok);
+      } else {
+        tur = "ek";
+        govde = "[bilinmeyen blok: " + blokTuru + "]";
+        bilinmeyen = true;
+      }
+      // Bu çağrıda bu kimliğin bu bloğu satır ürettiyse yeniden üretilmez
+      // (sayaçlar da ikinci kez artmaz).
+      if (uretenBloklar !== null) {
+        if (uretenBloklar[String(b)] === true) continue;
+        uretenBloklar[String(b)] = true;
+      }
+      if (bilinmeyen) bilinmeyenBlok += 1;
+      // Kimlik bloğun `prompt` dizisindeki sırasını taşır (satır üretmeyen
+      // blok da sırasını tüketir): aynı kayıt yeniden okununca aynı kimlikler.
+      mesajlar.push(satirKur(kimlik + "#" + String(b), an, "kullanici", tur, govde, null));
+      sira += 1;
+      uretilen += 1;
+    }
+    // Hiç satır üretmeyen kayıt: bu çağrıda aynı kimlik daha önce görüldüyse
+    // tekrar, görülmediyse boş.
+    if (uretilen === 0) atla(onceGoruldu ? "tur_ortasi:tekrar" : "tur_ortasi:bos");
+    return true;
+  };
+
   // `user`/`assistant` DIŞINDAKİ satır. true = işlendi (satır üretti ya da
-  // "yerel_mesaj:*" nedeniyle sayıldı); false = eski yol (`atla(satirTuru)`).
+  // "yerel_mesaj:*" / "tur_ortasi:*" nedeniyle sayıldı); false = eski yol
+  // (`atla(satirTuru)`).
   const yerelSatirIsle = function (kayit, satirTuru, satirNo) {
     const zaman = typeof kayit.timestamp === "string" ? kayit.timestamp : null;
 
@@ -927,7 +1010,8 @@ const satirlariAyristir = function (metin, baslangicSira, secenekler) {
       const ek = kayit.attachment;
       if (!ek || typeof ek !== "object" || ek.type !== "queued_command") return false;
       const cozum = yerelGelenCoz(ek.origin, icerikMetni(ek.prompt));
-      if (cozum === null) return false;
+      // Kanca 26: yerel mesaj adayı DEĞİLSE insanın tur ortası mesajı olabilir.
+      if (cozum === null) return insanKuyrukIsle(kayit, ek, zaman);
       if (cozum.bozuk === true) {
         atla("yerel_mesaj:bozuk_origin");
         return true;
